@@ -1,29 +1,38 @@
 #!/usr/bin/env python3
-"""health-mcp — a remote MCP server that stores a person's health data and returns
-analysis-ready views of it, so an LLM (via a claude.ai custom connector) can log,
-retrieve, and reason over that record on demand.
+"""HealthLedger MCP — a local-first, model-agnostic personal health record served
+over the Model Context Protocol.
+
+It stores a person's health data in a local SQLite file and returns analysis-ready
+views of it, so any MCP client — and any LLM behind it — can log, retrieve, and
+reason over that record on demand. It is not tied to any one vendor or model.
+
+By default it runs as a LOCAL stdio server: your MCP client launches it as a
+subprocess, nothing binds to the network, and the data never leaves your machine.
+Set HEALTH_MCP_TRANSPORT=http to instead run it as a remote, OAuth-protected HTTP
+server (optional — see "Remote mode" below).
 
 Not a medical device. It stores and summarizes what the user records; it does not
 diagnose or prescribe. The analysis tools return descriptive statistics and trends
-(counts, min/max, mean, median, spread, least-squares slope) — inputs for a human
-or model to interpret, not medical conclusions.
+(counts, min/max, mean, median, spread, slope with uncertainty, correlations,
+outliers, change-points) — inputs for a human or model to interpret, not conclusions.
 
-Security model (mirrors the sibling vps-mcp server)
----------------------------------------------------
-* Transport: Streamable HTTP bound to 127.0.0.1 only. Reached from the internet
-  exclusively through a Cloudflare Tunnel (public TLS hostname -> 127.0.0.1:PORT).
+Remote mode (optional, HEALTH_MCP_TRANSPORT=http)
+-------------------------------------------------
+* Transport: Streamable HTTP bound to 127.0.0.1 only; expose it through a reverse
+  proxy or tunnel (e.g. a Cloudflare Tunnel: public TLS hostname -> 127.0.0.1:PORT).
   It never binds publicly.
-* Auth: OAuth 2.1 via FastMCP's GitHub OAuth proxy. claude.ai runs the flow; the
+* Auth: OAuth 2.1 via FastMCP's GitHub OAuth proxy. The client runs the flow; the
   user authorizes with GitHub; FastMCP issues/validates the token.
 * Authorization: the GitHub token verifier is subclassed to an ALLOW-LIST. Only the
-  logins in HEALTH_MCP_ALLOWED_LOGINS may use the connector; any other authenticated
-  GitHub account is rejected (verify_token -> None -> 401).
-* Fail-closed: the process refuses to start without client id/secret AND at least
-  one allow-listed login. There is no "open" mode.
+  logins in HEALTH_MCP_ALLOWED_LOGINS may connect; any other authenticated GitHub
+  account is rejected (verify_token -> None -> 401).
+* Fail-closed: in http mode the process refuses to start without client id/secret
+  AND at least one allow-listed login. There is no "open" networked mode.
 * Data at rest: SQLite at HEALTH_MCP_DB (file mode 0600), journal_mode=WAL.
 
-Health data is sensitive. The GitHub OAuth-app secret and the allow-list are the
-only things between the internet and this person's health record.
+Health data is sensitive. In local mode it stays on your machine; in remote mode the
+GitHub OAuth-app secret and the allow-list are the only things between the internet
+and this person's health record.
 """
 
 from __future__ import annotations
@@ -76,13 +85,17 @@ ALLOWED_LOGINS = {
     if s.strip()
 }
 
-# Transport: "http" (remote, OAuth-protected — the default) or "stdio" (local, e.g.
-# Claude Desktop on a laptop). A stdio server is launched as a trusted subprocess of
-# the client and never touches the network, so it needs no tunnel and no OAuth.
-TRANSPORT = os.environ.get("HEALTH_MCP_TRANSPORT", "http").strip().lower()
+# Transport: "stdio" (local, the default) or "http" (remote, OAuth-protected). In
+# stdio mode any MCP client (Claude Desktop, Cline, Cursor, Zed, Continue, LibreChat,
+# custom agents, …) launches this as a trusted subprocess; it never touches the
+# network, so it needs no tunnel and no OAuth. Use "http" only to self-host a shared
+# remote instance.
+TRANSPORT = os.environ.get("HEALTH_MCP_TRANSPORT", "stdio").strip().lower()
 
-DB_PATH = Path(os.path.expanduser(os.environ.get("HEALTH_MCP_DB", "/srv/health-mcp/health.db")))
-AUDIT_LOG = Path(os.path.expanduser(os.environ.get("HEALTH_MCP_AUDIT_LOG", "/srv/health-mcp/audit.log")))
+# Data lives on the user's own machine. Defaults to ~/.healthledger; override with
+# HEALTH_MCP_DB / HEALTH_MCP_AUDIT_LOG (the parent directory is created on startup).
+DB_PATH = Path(os.path.expanduser(os.environ.get("HEALTH_MCP_DB", "~/.healthledger/health.db")))
+AUDIT_LOG = Path(os.path.expanduser(os.environ.get("HEALTH_MCP_AUDIT_LOG", "~/.healthledger/audit.log")))
 DEFAULT_USER = os.environ.get("HEALTH_MCP_DEFAULT_USER", "me").strip() or "me"
 MAX_ROWS = _int_env("HEALTH_MCP_MAX_ROWS", 1000, min_value=1, max_value=10000)
 MAX_TEXT_CHARS = _int_env("HEALTH_MCP_MAX_TEXT_CHARS", 20000, min_value=1, max_value=200000)
@@ -4806,20 +4819,26 @@ def health_status(user: str | None = None) -> dict:
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console entry point. Runs a local stdio server by default; HEALTH_MCP_TRANSPORT=http
+    runs the optional remote, OAuth-protected server instead."""
     if TRANSPORT == "stdio":
-        # Local mode (e.g. Claude Desktop on a MacBook). No OAuth: the process is a
-        # trusted local subprocess of the client and never binds to the network.
+        # Local mode: any MCP client launches this as a trusted subprocess. No OAuth,
+        # no network — the record stays on this machine.
         _init_db()
         sys.stderr.write(
-            f"health-mcp starting (stdio, local): db={DB_PATH} default_user={DEFAULT_USER}\n"
+            f"HealthLedger MCP starting (stdio, local): db={DB_PATH} default_user={DEFAULT_USER}\n"
         )
         mcp.run()  # stdio transport (the FastMCP default)
     else:
         _fail_closed()
         _init_db()
         sys.stderr.write(
-            f"health-mcp starting: {PUBLIC_URL}{MCP_PATH} -> {HOST}:{PORT} "
+            f"HealthLedger MCP starting (http, remote): {PUBLIC_URL}{MCP_PATH} -> {HOST}:{PORT} "
             f"(db={DB_PATH}, allow-list: {', '.join(sorted(ALLOWED_LOGINS))})\n"
         )
         mcp.run(transport="http", host=HOST, port=PORT, path=MCP_PATH)
+
+
+if __name__ == "__main__":
+    main()

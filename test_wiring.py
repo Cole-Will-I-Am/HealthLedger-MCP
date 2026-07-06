@@ -11,6 +11,8 @@ import os
 from urllib.parse import urlparse
 
 # Dummy config so the module builds; fail-closed checks only run in __main__.
+# This test exercises the optional remote (http) mode, so pin the transport.
+os.environ.setdefault("HEALTH_MCP_TRANSPORT", "http")
 os.environ.setdefault("HEALTH_MCP_GITHUB_CLIENT_ID", "test-client-id")
 os.environ.setdefault("HEALTH_MCP_GITHUB_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("HEALTH_MCP_ALLOWED_LOGINS", "Cole-Will-I-Am")

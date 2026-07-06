@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthledger-mcp"
+version = "0.2.0"
+description = "A local-first, model-agnostic personal health record served over the Model Context Protocol (MCP)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Cole Williams" }]
+keywords = ["mcp", "model-context-protocol", "health", "personal-health-record", "local-first", "sqlite"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+  "fastmcp>=3,<4",
+]
+
+[project.urls]
+Homepage = "https://github.com/Cole-Will-I-Am/HealthLedger-MCP"
+Repository = "https://github.com/Cole-Will-I-Am/HealthLedger-MCP"
+
+# Local stdio server by default. `healthledger-mcp` (alias `health-mcp`) starts it.
+[project.scripts]
+healthledger-mcp = "server:main"
+health-mcp = "server:main"
+
+[tool.setuptools]
+py-modules = ["server"]

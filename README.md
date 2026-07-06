@@ -2,138 +2,120 @@
 
 # 🩺 HealthLedger&nbsp;MCP
 
-**Own your health record. Let an LLM read and reason over it — on your terms.**
+**Your health record, on your machine. Let any AI read and reason over it — on your terms.**
 
-A remote [Model Context Protocol](https://modelcontextprotocol.io) server that stores your
-**personal health data** and hands back **analysis-ready views**, so a model (via a
-claude.ai custom connector) can log, retrieve, and reason over that record on demand.
+A **local-first, model-agnostic** [Model Context Protocol](https://modelcontextprotocol.io)
+server that stores your **personal health data** in a local SQLite file and hands back
+**analysis-ready views**, so **any MCP client — and any LLM behind it** — can log, retrieve,
+and reason over that record on demand.
 
-[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
 [![Tools](https://img.shields.io/badge/tools-72-0EA5E9)](#-tool-catalog)
-[![Auth](https://img.shields.io/badge/auth-GitHub%20OAuth-181717?logo=github&logoColor=white)](#-security-model)
+[![Local-first](https://img.shields.io/badge/runs-local--first-16A34A)](#-quick-start)
+[![Model-agnostic](https://img.shields.io/badge/works%20with-any%20LLM-8B5CF6)](#-use-it-with-any-client--any-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
-[![Status](https://img.shields.io/badge/status-fail--closed-16A34A)](#-security-model)
 
 </div>
 
 > [!WARNING]
 > **Not a medical device.** HealthLedger stores and summarizes what *you* record. Its
-> analysis tools return descriptive statistics and trends — **not diagnosis**. For any
-> clinical decision, consult a licensed professional.
+> analysis tools return descriptive statistics, trends, and associations — **not diagnosis**.
+> For any clinical decision, consult a licensed professional.
 
 ---
 
 ## ✨ What it does
 
-HealthLedger is a single-tenant-friendly, multi-user-capable health ledger that lives
-behind a Cloudflare Tunnel and a GitHub-OAuth allow-list. It is the sibling of `vps-mcp`
-and shares its security model.
+HealthLedger is a personal health ledger you run yourself. Install it wherever you want,
+point your AI client at it, and start adding your data. By default it runs as a **local
+stdio server** — nothing binds to the network and the record never leaves your machine.
 
 | | |
 |---|---|
-| 🔐 **Private by construction** | Binds `127.0.0.1` only; reachable exclusively through your Cloudflare Tunnel + OAuth allow-list. |
+| 🏠 **Local-first** | Runs as a stdio subprocess of your MCP client. No server to host, no account, no network — your data lives in a local SQLite file. |
+| 🤖 **Model-agnostic** | It's a plain MCP server. Works with any MCP-capable client (Claude Desktop, Cline, Cursor, Zed, Continue, LibreChat, custom agents…) and any model behind it. |
 | 🧱 **Structured clinical schema** | 20+ dedicated tables (conditions, meds, labs, biomarkers, oncology, imaging, wearables, …) rather than a bag of notes. |
-| 📈 **Analysis-ready** | Trend tools compute count / min / max / mean / median plus a least-squares slope over dated numeric values. |
-| 🔗 **Cross-signal reasoning** | Correlate two signals, estimate before/after change around an event, align many signals onto one time grid, and reconcile units & reference ranges — across metrics, wearables, labs, biomarkers, and substances. |
-| 📐 **Trend intelligence** | Slopes with a confidence interval and p-value (real trend vs noise), robust outlier flags, latest-vs-baseline framing, non-linear/cyclical warnings, and change-point detection — not just a bare fitted line. |
-| 🧑‍🤝‍🧑 **Multi-person** | Every tool takes an optional `user` label, so one server can hold a whole household. |
-| 🧾 **Auditable** | Every tool call is appended to `audit.log`; daily SQLite backups run on a timer. |
-| 🚪 **Fail-closed** | Refuses to start without real OAuth credentials — no accidental open endpoint. |
+| 📈 **Analysis-ready** | Trend tools compute count / min / max / mean / median plus a slope **with uncertainty** over dated numeric values. |
+| 🔗 **Cross-signal reasoning** | Correlate two signals, estimate before/after change around an event, align many signals onto one time grid, and reconcile units & reference ranges. |
+| 📐 **Trend intelligence** | Slopes with a confidence interval and p-value (real trend vs noise), robust outlier flags, latest-vs-baseline framing, non-linear/cyclical warnings, and change-point detection. |
+| 🧑‍🤝‍🧑 **Multi-person** | Every tool takes an optional `user` label, so one instance can hold a whole household. |
+| 🌐 **Optional remote mode** | If you *want* a shared instance, it can run as an OAuth-protected HTTP server behind a tunnel. Entirely opt-in — see [Remote mode](#-remote-mode-optional). |
 
 ---
 
 ## 🚀 Quick start
 
-> The service ships **installed but fail-closed**. One setup step stands between you and a
-> running server: creating a GitHub OAuth App.
-
-### 1 · Create a GitHub OAuth App
-
-Go to **[github.com/settings/developers](https://github.com/settings/developers) → New OAuth App**:
-
-| Field | Value |
-|---|---|
-| Homepage URL | `https://health-mcp.manticthink.com` |
-| Authorization callback URL | `https://health-mcp.manticthink.com/auth/callback` |
-
-Then **Generate a new client secret**.
-
-### 2 · Drop the credentials into `.env`
-
-```dotenv
-# /srv/health-mcp/.env
-HEALTH_MCP_GITHUB_CLIENT_ID=...
-HEALTH_MCP_GITHUB_CLIENT_SECRET=...
-```
-
-### 3 · Start it
+You need Python 3.11+. The fastest path uses [`uv`](https://docs.astral.sh/uv/) (`uvx` runs it with zero install):
 
 ```bash
-systemctl reset-failed health-mcp   # clear the fail-closed state
-systemctl start health-mcp
-systemctl status health-mcp --no-pager
+# Try it directly from the repo — no clone, no install:
+uvx --from git+https://github.com/Cole-Will-I-Am/HealthLedger-MCP healthledger-mcp
 ```
 
-> Only GitHub logins listed in `HEALTH_MCP_ALLOWED_LOGINS` (currently **`Cole-Will-I-Am`**) may connect.
+Prefer a persistent install?
 
-### 4 · Connect from claude.ai
-
-**Settings → Connectors → Add custom connector**, URL:
-
+```bash
+pipx install git+https://github.com/Cole-Will-I-Am/HealthLedger-MCP
+# or, from a clone:
+git clone https://github.com/Cole-Will-I-Am/HealthLedger-MCP && cd HealthLedger-MCP
+pip install .
+healthledger-mcp        # starts a local stdio server
 ```
-https://health-mcp.manticthink.com/mcp
-```
 
-…then authorize with GitHub. Done.
+That's it — no OAuth, no tunnel, no account. Your data is written to
+`~/.healthledger/health.db` (override with `HEALTH_MCP_DB`).
 
 ---
 
-## 🌐 Endpoint
+## 🔌 Use it with any client / any model
 
-| | |
-|---|---|
-| **Public MCP URL** | `https://health-mcp.manticthink.com/mcp` |
-| **Local bind** | `127.0.0.1:8800` (never exposed directly) |
-| **Reachability** | via Cloudflare Tunnel `health-mcp` — id `93c6f3dd-3b3e-440a-9fe2-626e17ed5edb` |
+HealthLedger speaks stdio MCP, so it drops into the standard `mcpServers` config that
+virtually every MCP client uses. Point your client at it and you're done — the model on
+the other side can be Claude, a local Llama, GPT-something, whatever your client runs.
 
-**Health check** — an unauthenticated request should return `401` (server is *up and guarded*):
+**Zero-install (uvx):**
 
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://health-mcp.manticthink.com/mcp   # → 401
+```jsonc
+{
+  "mcpServers": {
+    "healthledger": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Cole-Will-I-Am/HealthLedger-MCP", "healthledger-mcp"]
+    }
+  }
+}
 ```
 
----
+**After `pipx`/`pip install`:**
 
-## 🔒 Security model
-
+```jsonc
+{
+  "mcpServers": {
+    "healthledger": { "command": "healthledger-mcp" }
+  }
+}
 ```
-claude.ai ──HTTPS──► Cloudflare Tunnel ──► 127.0.0.1:8800  (health-mcp)
-                          │                        │
-                    GitHub OAuth            SQLite 0600 / WAL
-                   (allow-list only)         + audit.log
-```
 
-- The security boundary is the **GitHub-OAuth allow-list** in `server.py` plus the
-  **loopback bind** reached only through the tunnel — *not* systemd sandboxing (though
-  the unit is sandboxed too).
-- The app **exits with status `2`** when required OAuth config is missing. systemd treats
-  that as a non-restartable, deliberate fail-closed state.
-- Tool calls are **rate-limited in-process** per authenticated principal (falling back to
-  the `user` label for local/stdio calls).
+- **Claude Desktop** → `claude_desktop_config.json`
+- **Cursor** → `.cursor/mcp.json` · **Zed** → `context_servers` · **Cline / Continue / LibreChat** → their MCP settings
+- Any other MCP client → the same `command`/`args` shape
+
+> Want it to hold more than one person? Pass a `user` label on any tool call (defaults to
+> `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 ---
 
 ## 🗄️ Storage
 
-- **SQLite** at `/srv/health-mcp/health.db` — mode `0600`, WAL journaling.
+- **SQLite** at `~/.healthledger/health.db` — mode `0600`, WAL journaling. Override with `HEALTH_MCP_DB`.
 - **Schema v3** covers quantitative metrics, events, notes, profile facts, conditions,
   allergies, medications & dose logs, lab reports/results, biomarkers, tumor/cancer
   records, encounters/physicals, procedures, imaging, immunizations, care tasks,
   documents, enriched family history, reproductive-health records, substance-use logs,
   wearable/app sources, wearable samples, and a generic `health_records` catch-all.
-- **`audit.log`** records every tool call.
-- **`health-mcp-backup.timer`** writes daily SQLite backups to `/srv/health-mcp/backups`.
+- **`~/.healthledger/audit.log`** records every tool call (override with `HEALTH_MCP_AUDIT_LOG`).
+- It's just a SQLite file — back it up, sync it, or delete it like any other file.
 
 ### Profile keys (stable facts only)
 
@@ -230,18 +212,14 @@ Wearable imports are kept **separate** from ordinary metrics:
 
 ## ⚙️ Configuration
 
-All settings are environment variables (set in `/srv/health-mcp/.env`). Defaults shown.
+Everything is environment variables. Defaults shown; the local-mode defaults need no setup.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HEALTH_MCP_GITHUB_CLIENT_ID` | *(required)* | GitHub OAuth App client id |
-| `HEALTH_MCP_GITHUB_CLIENT_SECRET` | *(required)* | GitHub OAuth App client secret |
-| `HEALTH_MCP_ALLOWED_LOGINS` | `Cole-Will-I-Am` | comma-separated GitHub logins allowed to connect |
-| `HEALTH_MCP_PUBLIC_URL` | `https://health-mcp.manticthink.com` | public base URL |
+| `HEALTH_MCP_TRANSPORT` | `stdio` | `stdio` (local) or `http` (remote, opt-in) |
+| `HEALTH_MCP_DB` | `~/.healthledger/health.db` | SQLite database path |
+| `HEALTH_MCP_AUDIT_LOG` | `~/.healthledger/audit.log` | audit log path |
 | `HEALTH_MCP_DEFAULT_USER` | `me` | default `user` label when none is passed |
-| `HEALTH_MCP_HOST` | `127.0.0.1` | bind address |
-| `HEALTH_MCP_PORT` | `8800` | bind port |
-| `HEALTH_MCP_PATH` | `/mcp` | MCP mount path |
 | `HEALTH_MCP_MAX_ROWS` | `1000` | max rows returned by a list query |
 | `HEALTH_MCP_MAX_EXPORT_ROWS` | `500` | max rows per export page |
 | `HEALTH_MCP_MAX_TEXT_CHARS` | `20000` | max chars per free-text field |
@@ -250,49 +228,50 @@ All settings are environment variables (set in `/srv/health-mcp/.env`). Defaults
 | `HEALTH_MCP_RATE_LIMIT_CALLS` | `240` | calls allowed per window |
 | `HEALTH_MCP_RATE_LIMIT_WINDOW_SECONDS` | `60` | rate-limit window length |
 
----
-
-## 🧩 Services
-
-| Unit | Role | State |
-|---|---|---|
-| `health-mcp.service` | the MCP server | enabled — starts once creds are set |
-| `health-mcp-tunnel.service` | Cloudflare Tunnel | enabled, running |
-| `health-mcp-backup.timer` | daily SQLite backup | enabled |
-
-> If the app is in the fail-closed state after you fill `.env`, run
-> `systemctl reset-failed health-mcp && systemctl start health-mcp`.
-
----
-
-## 🛠️ Operations
-
-```bash
-journalctl -u health-mcp -f            # app logs
-journalctl -u health-mcp-tunnel -f     # tunnel logs
-journalctl -u health-mcp-backup -n 50  # backup logs
-
-sqlite3 /srv/health-mcp/health.db .tables
-systemctl list-timers health-mcp-backup.timer
-/srv/health-mcp/bin/backup.sh          # run a manual SQLite backup
-```
+**Remote-mode-only** (`HEALTH_MCP_TRANSPORT=http`): `HEALTH_MCP_GITHUB_CLIENT_ID`,
+`HEALTH_MCP_GITHUB_CLIENT_SECRET`, `HEALTH_MCP_ALLOWED_LOGINS`, `HEALTH_MCP_PUBLIC_URL`,
+`HEALTH_MCP_HOST` (`127.0.0.1`), `HEALTH_MCP_PORT` (`8800`), `HEALTH_MCP_PATH` (`/mcp`).
 
 ---
 
 ## ✅ Offline tests
 
-These touch **neither** the production SQLite database **nor** real GitHub OAuth
-credentials:
+From a clone (these touch **neither** your real database **nor** real GitHub credentials —
+they use a temp DB and dummy config):
 
 ```bash
-cd /srv/health-mcp
-./.venv/bin/python test_wiring.py
-./.venv/bin/python test_tools.py
+python test_tools.py     # exercises the tools end-to-end
+python test_wiring.py    # exercises the optional remote (OAuth) wiring
 ```
 
 ---
 
+## 🌐 Remote mode (optional)
+
+You don't need any of this to use HealthLedger — it's for people who want to reach one
+instance from a networked client (e.g. a web-based assistant) instead of running it
+locally. Set `HEALTH_MCP_TRANSPORT=http` and it becomes an OAuth-protected HTTP server:
+
+```
+client ──HTTPS──► reverse proxy / tunnel ──► 127.0.0.1:8800  (HealthLedger, http mode)
+                        │                            │
+                  GitHub OAuth                SQLite 0600 / WAL
+                 (allow-list only)             + audit.log
+```
+
+- Binds `127.0.0.1` only; expose it via your own reverse proxy or a Cloudflare Tunnel.
+- **Auth**: OAuth 2.1 via FastMCP's GitHub OAuth proxy. Only the GitHub logins in
+  `HEALTH_MCP_ALLOWED_LOGINS` may connect — everyone else gets `401`.
+- **Fail-closed**: in http mode the process refuses to start without client id/secret and
+  at least one allow-listed login. There is no open networked mode.
+- Health check: an unauthenticated request returns `401` (up and guarded).
+
+**Live demo:** a single-tenant instance runs at `https://health-mcp.manticthink.com/mcp`
+(allow-listed to the maintainer). It's there to show the remote path working — to actually
+use HealthLedger, run your own local copy per [Quick start](#-quick-start).
+
+---
+
 <div align="center">
-<sub>Built on the Model Context Protocol · Cloudflare Tunnel · GitHub OAuth · SQLite.
-Sibling project of <code>vps-mcp</code>.</sub>
+<sub>Local-first · model-agnostic · built on the Model Context Protocol &amp; SQLite.</sub>
 </div>
