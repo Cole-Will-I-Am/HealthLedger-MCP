@@ -1,0 +1,17 @@
+.env
+.local/
+.venv/
+__pycache__/
+*.py[cod]
+
+health.db
+health.db-*
+*.db
+*.db-*
+audit.log
+backups/
+
+server.py.bak.*
+deepseek-*.md
+
+.DS_Store
