@@ -9,31 +9,38 @@ from healthledger.db import _rows
 
 
 # source key -> how to pull a dated numeric series from its table.
+# created_col / source_col carry provenance (import time, origin) where the table
+# has them, so callers can report recency and where a value came from.
 _SERIES_SOURCES = {
     "metric": {
         "table": "metrics", "name_col": "metric", "ts_col": "ts",
         "value_col": "value", "unit_col": "unit",
         "date_mode": "full", "coalesce_created": False, "has_ref": False,
+        "created_col": None, "source_col": None,
     },
     "wearable": {
         "table": "wearable_samples", "name_col": "sample_type", "ts_col": "start_ts",
         "value_col": "value", "unit_col": "unit",
         "date_mode": "full", "coalesce_created": False, "has_ref": False,
+        "created_col": "created_ts", "source_col": "source_name",
     },
     "lab": {
         "table": "lab_results", "name_col": "analyte", "ts_col": "result_date",
         "value_col": "numeric_value", "unit_col": "unit",
         "date_mode": "date", "coalesce_created": True, "has_ref": True,
+        "created_col": "created_ts", "source_col": None,
     },
     "biomarker": {
         "table": "biomarkers", "name_col": "biomarker", "ts_col": "measured_date",
         "value_col": "numeric_value", "unit_col": "unit",
         "date_mode": "date", "coalesce_created": True, "has_ref": True,
+        "created_col": "created_ts", "source_col": "source",
     },
     "substance": {
         "table": "substance_use_logs", "name_col": "substance", "ts_col": "timestamp",
         "value_col": "amount", "unit_col": "unit",
         "date_mode": "full", "coalesce_created": False, "has_ref": False,
+        "created_col": "created_ts", "source_col": None,
     },
 }
 
@@ -61,13 +68,19 @@ def _resolve_series(conn, user: str, source: str | None, name: str | None,
     """Pull one dated numeric series from any supported source, ascending by time.
 
     Returns (source_key, normalized_name, source_config, items) where each item is
-    {ts, value, unit[, ref_low, ref_high]} and non-numeric rows are dropped."""
+    {id, ts, value, unit[, ref_low, ref_high][, created_ts][, source]} and
+    non-numeric rows are dropped. The id + created_ts + source give callers what
+    they need to cite the exact row and report its recency/origin."""
     key, cfg = _series_source(source)
     clean = _keyish(_required_text(name, "name"), "name")
     ts_expr = f"COALESCE({cfg['ts_col']}, created_ts)" if cfg["coalesce_created"] else cfg["ts_col"]
-    cols = [f"{ts_expr} AS ts", f"{cfg['value_col']} AS value", f"{cfg['unit_col']} AS unit"]
+    cols = [f"id AS id", f"{ts_expr} AS ts", f"{cfg['value_col']} AS value", f"{cfg['unit_col']} AS unit"]
     if cfg["has_ref"]:
         cols += ["ref_low AS ref_low", "ref_high AS ref_high"]
+    if cfg.get("created_col"):
+        cols.append(f"{cfg['created_col']} AS created_ts")
+    if cfg.get("source_col"):
+        cols.append(f"{cfg['source_col']} AS source")
     sql = (
         f"SELECT {', '.join(cols)} FROM {cfg['table']} "
         f"WHERE user=? AND {cfg['name_col']}=? AND {cfg['value_col']} IS NOT NULL"
@@ -85,10 +98,14 @@ def _resolve_series(conn, user: str, source: str | None, name: str | None,
         ts = r.get("ts")
         if ts is None:
             continue
-        item = {"ts": _to_full_ts(ts), "value": float(r["value"]), "unit": r.get("unit")}
+        item = {"id": r.get("id"), "ts": _to_full_ts(ts), "value": float(r["value"]), "unit": r.get("unit")}
         if cfg["has_ref"]:
             item["ref_low"] = r.get("ref_low")
             item["ref_high"] = r.get("ref_high")
+        if cfg.get("created_col"):
+            item["created_ts"] = r.get("created_ts")
+        if cfg.get("source_col"):
+            item["source"] = r.get("source")
         items.append(item)
     return key, clean, cfg, items
 

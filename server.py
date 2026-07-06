@@ -18,6 +18,7 @@ from healthledger.tools.life import *          # noqa: F401,F403
 from healthledger.tools.crosssignal import *   # noqa: F401,F403
 from healthledger.tools.trends import *        # noqa: F401,F403
 from healthledger.tools.overview import *      # noqa: F401,F403
+from healthledger.tools.retrieval import *     # noqa: F401,F403
 
 if __name__ == "__main__":
     main()

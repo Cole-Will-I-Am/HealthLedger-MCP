@@ -70,10 +70,12 @@ def correlate_metrics(
         "user": u,
         "series_a": {"source": skey_a, "name": clean_a,
                      "unit": items_a[-1]["unit"] if items_a else None,
-                     "n_readings": len(items_a), "n_buckets": len(grid_a)},
+                     "n_readings": len(items_a), "n_buckets": len(grid_a),
+                     "source_ids": [it["id"] for it in items_a if it.get("id") is not None]},
         "series_b": {"source": skey_b, "name": clean_b,
                      "unit": items_b[-1]["unit"] if items_b else None,
-                     "n_readings": len(items_b), "n_buckets": len(grid_b)},
+                     "n_readings": len(items_b), "n_buckets": len(grid_b),
+                     "source_ids": [it["id"] for it in items_b if it.get("id") is not None]},
         "resample": resample, "agg": agg, "lag_days": lag,
         "paired_n": len(paired),
         "overlap": ({"first_bucket": paired[0][0], "last_bucket": paired[-1][0]}
@@ -173,6 +175,8 @@ def analyze_event_impact(
         "unit": items[-1]["unit"] if items else None,
         "window_days": wd,
         "washout_days": wash,
+        "source_ids": {"before": [it["id"] for it in before if it.get("id") is not None],
+                       "after": [it["id"] for it in after if it.get("id") is not None]},
         "before": _group_stats(before),
         "after": _group_stats(after),
         "disclaimer": "Descriptive before/after comparison; not proof of causation or medical advice.",
@@ -261,6 +265,7 @@ def align_series(
             grid = _resample_series(items, resample, spec_agg)
             grids.append((label, grid))
             meta.append({"label": label, "source": skey, "name": clean,
+                         "source_ids": [it["id"] for it in items if it.get("id") is not None],
                          "unit": items[-1]["unit"] if items else None, "agg": spec_agg,
                          "n_readings": len(items), "n_buckets": len(grid)})
     _audit("align_series", f"{_audit_user(u)} series={len(specs)} resample={resample} join={join}")
@@ -350,6 +355,7 @@ def normalize_series(
     for it in items[-lim:]:
         conv_val, ok, tag = _convert_value(it["value"], it["unit"], target, analyte_key)
         row = {
+            "id": it.get("id"),
             "ts": it["ts"],
             "original_value": round(it["value"], 6),
             "original_unit": it["unit"],
@@ -385,6 +391,7 @@ def normalize_series(
         "count": len(rows),
         "converted_count": len(converted_values),
         "unconverted_units": sorted(unconverted),
+        "source_ids": [r["id"] for r in rows if r.get("id") is not None],
         "rows": rows,
         "disclaimer": "Unit/reference normalization only; not interpretation or diagnosis.",
     }

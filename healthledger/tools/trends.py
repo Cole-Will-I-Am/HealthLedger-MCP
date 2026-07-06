@@ -52,6 +52,13 @@ def analyze_trend(
     xs = [(datetime.fromisoformat(ts) - t0).total_seconds() / 86400.0 for ts, _ in points]
     trend = _linreg_per_day(points)
     linear_r2 = trend.get("r_squared") if trend else None
+    last = items[-1]
+    latest = {"id": last.get("id"), "ts": last["ts"], "value": round(last["value"], 4),
+              "days_stale": _days_since(last["ts"])}
+    if "source" in last:
+        latest["source"] = last.get("source")
+    if "created_ts" in last:
+        latest["recorded"] = last.get("created_ts")
     return {
         "user": u,
         "source": skey,
@@ -59,8 +66,9 @@ def analyze_trend(
         "unit": items[-1]["unit"],
         "count": len(items),
         "window": {"since": lo, "until": hi},
-        "first": {"ts": items[0]["ts"], "value": round(items[0]["value"], 4)},
-        "latest": {"ts": items[-1]["ts"], "value": round(items[-1]["value"], 4)},
+        "source_ids": [it["id"] for it in items if it.get("id") is not None],
+        "first": {"id": items[0].get("id"), "ts": items[0]["ts"], "value": round(items[0]["value"], 4)},
+        "latest": latest,
         "mean": round(statistics.fmean(values), 4),
         "median": round(statistics.median(values), 4),
         "stdev": round(statistics.stdev(values), 4) if len(values) > 1 else 0.0,

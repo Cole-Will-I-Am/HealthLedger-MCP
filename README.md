@@ -11,7 +11,7 @@ and reason over that record on demand.
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-72-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-75-0EA5E9)](#-tool-catalog)
 [![Local-first](https://img.shields.io/badge/runs-local--first-16A34A)](#-quick-start)
 [![Model-agnostic](https://img.shields.io/badge/works%20with-any%20LLM-8B5CF6)](#-use-it-with-any-client--any-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
@@ -39,6 +39,7 @@ stdio server** — nothing binds to the network and the record never leaves your
 | 📈 **Analysis-ready** | Trend tools compute count / min / max / mean / median plus a slope **with uncertainty** over dated numeric values. |
 | 🔗 **Cross-signal reasoning** | Correlate two signals, estimate before/after change around an event, align many signals onto one time grid, and reconcile units & reference ranges. |
 | 📐 **Trend intelligence** | Slopes with a confidence interval and p-value (real trend vs noise), robust outlier flags, latest-vs-baseline framing, non-linear/cyclical warnings, and change-point detection. |
+| 🔎 **Retrieval &amp; grounding** | Ranked full-text search over all free text (local FTS5, no embeddings), an explicit "what's present / absent / stale" coverage view, and `source_ids` + `get_record` so every computed claim traces to a specific row. |
 | 🧑‍🤝‍🧑 **Multi-person** | Every tool takes an optional `user` label, so one instance can hold a whole household. |
 | 🌐 **Optional remote mode** | If you *want* a shared instance, it can run as an OAuth-protected HTTP server behind a tunnel. Entirely opt-in — see [Remote mode](#-remote-mode-optional). |
 
@@ -129,7 +130,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**72 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**75 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -175,6 +176,12 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 </details>
 
 <details>
+<summary><b>🔎 Retrieval &amp; grounding</b></summary>
+
+`semantic_search` · `get_record` · `data_coverage`
+</details>
+
+<details>
 <summary><b>🗓️ Planning, whole-record views &amp; operations</b></summary>
 
 `add_care_task` · `complete_care_task` · `list_care_tasks` · `list_due_tasks` ·
@@ -192,6 +199,10 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 | `analyze_event_impact` | before/after descriptive stats around a discrete event (med start, procedure) plus the difference in means and a Welch t-test |
 | `align_series` | 2+ signals resampled onto one shared day/week/month grid — one row per bucket, one column per signal (inner or outer join) |
 | `normalize_series` | one signal's readings converted to a common unit (incl. mg/dL↔mmol/L via analyte molar mass) with reference ranges reconciled and a unitless in-range position |
+| `semantic_search` | relevance-ranked (BM25) full-text over **all** free text — notes, event details, encounter reasons/plans, lab flags, imaging findings, document text, … — stemmed, best-first; each hit carries `source_table` + `record_id` + a highlighted snippet. Local FTS5, no embeddings/network. |
+| `data_coverage` | what's present / absent / stale, as data: per-domain counts with latest date &amp; staleness, an explicit list of **empty** domains, and a per-signal inventory — so the model checks before asserting instead of confabulating |
+| `get_record` | fetch one exact row by `table` + `id` — resolves a `source_ids` citation to the underlying data |
+| `analyze_*` (grounding) | analysis tools now return `source_ids` (the rows behind the numbers) and the latest value's `days_stale`, so every claim is traceable and recency is explicit |
 | `summarize_health` | compact cross-domain digest of the record |
 | `health_agenda` | stored upcoming tasks, refills, follow-ups, immunizations, reproductive due dates |
 | `care_gap_report` | missing/stale stored data and unresolved follow-ups — **without** clinical screening claims |

@@ -48,3 +48,15 @@ def _date_or_now(value: str | None, field: str) -> str:
     if parsed is None:
         raise ValueError(f"{field} is required")
     return parsed
+
+
+def _days_since(ts: str | None) -> float | None:
+    """Whole+fractional days between `ts` and now (UTC). None if unparseable.
+    Recency is decision-relevant, so this is surfaced as explicit provenance."""
+    if ts is None or str(ts).strip() == "":
+        return None
+    try:
+        dt = datetime.fromisoformat(_parse_ts(str(ts)))
+    except (ValueError, TypeError):
+        return None
+    return round((datetime.now(timezone.utc) - dt).total_seconds() / 86400.0, 2)

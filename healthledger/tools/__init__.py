@@ -11,4 +11,5 @@ from healthledger.tools import (  # noqa: F401
     crosssignal,
     trends,
     overview,
+    retrieval,
 )

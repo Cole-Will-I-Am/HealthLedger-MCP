@@ -154,7 +154,7 @@ def analyze_lab_trend(analyte: str, since: str | None = None, until: str | None 
     _audit("analyze_lab_trend", f"{_audit_user(u)} analyte_hash={_fingerprint(clean_analyte)}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT result_date, numeric_value, unit, ref_low, ref_high, flag FROM lab_results "
+            "SELECT id, result_date, created_ts, numeric_value, unit, ref_low, ref_high, flag FROM lab_results "
             "WHERE user=? AND analyte=? AND numeric_value IS NOT NULL "
             "AND substr(COALESCE(result_date, created_ts), 1, 10) BETWEEN ? AND ? "
             "ORDER BY COALESCE(result_date, created_ts) ASC",
@@ -169,7 +169,9 @@ def analyze_lab_trend(analyte: str, since: str | None = None, until: str | None 
         "analyte": clean_analyte,
         "count": len(rows),
         "unit": rows[-1]["unit"],
+        "source_ids": [r["id"] for r in rows],
         "latest": rows[-1],
+        "latest_days_stale": _days_since(rows[-1]["result_date"] or rows[-1]["created_ts"]),
         "min": min(values),
         "max": max(values),
         "mean": round(statistics.fmean(values), 4),
@@ -270,7 +272,7 @@ def analyze_biomarker_trend(biomarker: str, since: str | None = None, until: str
     _audit("analyze_biomarker_trend", f"{_audit_user(u)} biomarker_hash={_fingerprint(clean_marker)}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT measured_date, numeric_value, unit, ref_low, ref_high, flag FROM biomarkers "
+            "SELECT id, measured_date, created_ts, numeric_value, unit, ref_low, ref_high, flag FROM biomarkers "
             "WHERE user=? AND biomarker=? AND numeric_value IS NOT NULL "
             "AND substr(COALESCE(measured_date, created_ts), 1, 10) BETWEEN ? AND ? "
             "ORDER BY COALESCE(measured_date, created_ts) ASC",
@@ -285,7 +287,9 @@ def analyze_biomarker_trend(biomarker: str, since: str | None = None, until: str
         "biomarker": clean_marker,
         "count": len(rows),
         "unit": rows[-1]["unit"],
+        "source_ids": [r["id"] for r in rows],
         "latest": rows[-1],
+        "latest_days_stale": _days_since(rows[-1]["measured_date"] or rows[-1]["created_ts"]),
         "min": min(values),
         "max": max(values),
         "mean": round(statistics.fmean(values), 4),

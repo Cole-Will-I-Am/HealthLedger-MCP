@@ -222,7 +222,7 @@ def analyze_substance_trend(
     _audit("analyze_substance_trend", f"{_audit_user(u)} substance_hash={_fingerprint(clean_substance)}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT timestamp, amount, unit FROM substance_use_logs "
+            "SELECT id, timestamp, amount, unit FROM substance_use_logs "
             "WHERE user=? AND substance=? AND amount IS NOT NULL AND timestamp BETWEEN ? AND ? "
             "ORDER BY timestamp ASC",
             (u, clean_substance, lo, hi),
@@ -241,6 +241,8 @@ def analyze_substance_trend(
         "count": len(rows),
         "logged_days": len(daily),
         "unit": rows[-1]["unit"],
+        "source_ids": [r["id"] for r in rows],
+        "latest_days_stale": _days_since(rows[-1]["timestamp"]),
         "total_amount": round(sum(values), 4),
         "mean_per_logged_day": round(statistics.fmean(values), 4),
         "median_per_logged_day": round(statistics.median(values), 4),
@@ -448,7 +450,7 @@ def analyze_wearable_trend(
     lo, hi = _range_bounds(since, until)
     clean_type = _keyish(sample_type, "sample_type")
     sql = (
-        "SELECT start_ts, value, unit, aggregation, source_name FROM wearable_samples "
+        "SELECT id, start_ts, created_ts, value, unit, aggregation, source_name FROM wearable_samples "
         "WHERE user=? AND sample_type=? AND start_ts BETWEEN ? AND ?"
     )
     args: list = [u, clean_type, lo, hi]
@@ -468,7 +470,9 @@ def analyze_wearable_trend(
         "sample_type": clean_type,
         "count": len(rows),
         "unit": rows[-1]["unit"],
+        "source_ids": [r["id"] for r in rows],
         "latest": rows[-1],
+        "latest_days_stale": _days_since(rows[-1]["start_ts"]),
         "min": min(values),
         "max": max(values),
         "mean": round(statistics.fmean(values), 4),

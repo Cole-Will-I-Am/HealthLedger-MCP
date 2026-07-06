@@ -338,6 +338,52 @@ with tempfile.TemporaryDirectory() as tmp:
     check("analyze_metric now carries slope confidence",
           am_trend.get("r_squared") is not None and "significant" in am_trend, str(am_trend))
 
+    # --- retrieval & grounding --------------------------------------------
+    note_r = server.log_note("felt short of breath while climbing the stairs after lunch",
+                             title="Symptom log", tags="breathing,exertion", user="ground")
+    server.log_event("symptom", "dyspnea", detail="short of breath on exertion", user="ground")
+    for i, w in enumerate([72.0, 73.5, 74.0, 75.2]):
+        server.log_metric("weight_kg", w, "kg", timestamp=f"2026-0{i + 3}-10T08:00:00Z", user="ground")
+    server.add_lab_result("Glucose", "95", unit="mg/dL", result_date="2026-05-10",
+                          ref_low=70, ref_high=99, user="ground")
+
+    sem = server.semantic_search("breath stairs", user="ground")
+    check("semantic_search surfaces a relevant note",
+          sem["count"] >= 1 and any(h["source_table"] == "notes" and h["record_id"] == note_r["id"]
+                                    for h in sem["hits"]), str(sem))
+    check("semantic_search hit carries citation + relevance",
+          all(k in sem["hits"][0] for k in ("source_table", "record_id", "relevance")), str(sem["hits"][0]))
+
+    rec = server.get_record("notes", note_r["id"], user="ground")
+    check("get_record resolves a citation to the row",
+          rec["found"] is True and rec["record"]["id"] == note_r["id"]
+          and "breath" in rec["record"]["body"], str(rec))
+    check("get_record reports a missing row",
+          server.get_record("notes", 999999, user="ground")["found"] is False)
+
+    cov = server.data_coverage(user="ground")
+    check("data_coverage inventories tracked signals",
+          any(s["name"] == "weight_kg" and s["count"] == 4 for s in cov["tracked_signals"]["metrics"]),
+          str(cov["tracked_signals"]["metrics"]))
+    check("data_coverage reports empty domains explicitly",
+          "immunizations" in cov["empty_domains"], str(cov["empty_domains"]))
+    cov_one = server.data_coverage(source="metric", name="weight_kg", user="ground")
+    check("data_coverage scopes to one signal with recency",
+          cov_one["present"] is True and cov_one["count"] == 4 and cov_one["days_since_last"] is not None,
+          str(cov_one))
+    check("data_coverage reports an absent signal",
+          server.data_coverage(source="lab", name="hba1c", user="ground")["present"] is False)
+
+    at_g = server.analyze_trend("weight_kg", source="metric", user="ground")
+    check("analyze_trend cites its rows + latest staleness",
+          len(at_g["source_ids"]) == 4 and at_g["latest"].get("days_stale") is not None,
+          str({"ids": at_g["source_ids"], "latest": at_g["latest"]}))
+    lab_g = server.analyze_lab_trend("glucose", user="ground")
+    check("analyze_lab_trend cites its rows", len(lab_g["source_ids"]) == 1, str(lab_g))
+    corr_g = server.correlate_metrics("metric", "weight_kg", "lab", "glucose", resample="month", user="ground")
+    check("correlate exposes source_ids per series",
+          len(corr_g["series_a"]["source_ids"]) == 4, str(corr_g["series_a"]))
+
     search = server.search_records("pathology")
     check("search includes new domains", search["documents"] and search["tumors"], str(search))
     search_mri = server.search_records("mri")

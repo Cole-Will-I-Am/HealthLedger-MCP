@@ -297,7 +297,7 @@ def analyze_metric(
     _audit("analyze_metric", f"{_audit_user(u)} metric_hash={_fingerprint(m)} since={lo} until={hi}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT ts, value, unit FROM metrics WHERE user=? AND metric=? "
+            "SELECT id, ts, value, unit FROM metrics WHERE user=? AND metric=? "
             "AND ts BETWEEN ? AND ? ORDER BY ts ASC", (u, m, lo, hi)))
     if not rows:
         return {"user": u, "metric": m, "count": 0,
@@ -312,6 +312,7 @@ def analyze_metric(
         "last_ts": rows[-1]["ts"],
         "first_value": values[0],
         "latest_value": values[-1],
+        "latest_days_stale": _days_since(rows[-1]["ts"]),
         "min": min(values),
         "max": max(values),
         "mean": round(statistics.fmean(values), 4),
@@ -319,4 +320,5 @@ def analyze_metric(
         "stdev": round(statistics.pstdev(values), 4) if len(values) > 1 else 0.0,
     }
     stats["trend"] = _linreg_per_day(points)
-    return {"user": u, "metric": m, "window": {"since": lo, "until": hi}, "stats": stats}
+    return {"user": u, "metric": m, "window": {"since": lo, "until": hi},
+            "source_ids": [r["id"] for r in rows], "stats": stats}
