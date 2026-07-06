@@ -27,8 +27,9 @@ Repository = "https://github.com/Cole-Will-I-Am/HealthLedger-MCP"
 
 # Local stdio server by default. `healthledger-mcp` (alias `health-mcp`) starts it.
 [project.scripts]
-healthledger-mcp = "server:main"
-health-mcp = "server:main"
+healthledger-mcp = "healthledger.server:main"
+health-mcp = "healthledger.server:main"
 
 [tool.setuptools]
 py-modules = ["server"]
+packages = ["healthledger", "healthledger.analysis", "healthledger.tools"]
