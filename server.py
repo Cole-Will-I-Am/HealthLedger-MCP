@@ -1036,7 +1036,17 @@ mcp = FastMCP(
         "SpO2, and similar device/app measurements. Use batch import for repeated "
         "samples rather than individual note rows.\n"
         "  * dates and needs — use health_agenda for upcoming tasks/refills/follow-ups/"
-        "immunizations, and care_gap_report for missing or stale stored data.\n\n"
+        "immunizations, and care_gap_report for missing or stale stored data.\n"
+        "  * cross-signal reasoning — the single-series analyze_* tools look at one "
+        "signal in isolation; when a question is about a RELATIONSHIP, use the "
+        "cross-signal tools instead. correlate_metrics measures association between two "
+        "signals (e.g. weight vs A1c, sleep vs resting HR); analyze_event_impact "
+        "estimates a before/after change around a discrete event (medication start, "
+        "procedure); align_series resamples several signals onto one shared time grid so "
+        "you never hand-align timestamps; normalize_series reconciles differing units and "
+        "reference ranges so values from different labs/devices are comparable. These "
+        "signals may come from metrics, wearable samples, labs, biomarkers, or substance "
+        "logs. Association is not causation, and none of it is diagnosis.\n\n"
         "Every tool takes an optional `user` label so one server can hold several people "
         "(e.g. family members); it defaults to the configured primary user.\n\n"
         "This is a data store, not a clinician. Summary and trend tools return "
@@ -3595,6 +3605,780 @@ def export_data(
         "profile": profile,
         "pages": pages,
     }
+
+
+# --------------------------------------------------------------- cross-signal
+# Health insight lives in RELATIONSHIPS. Every analyze_* tool above looks at one
+# series in isolation; the tools below align two or more signals — drawn from
+# metrics, wearable samples, labs, biomarkers, or substance logs — onto a common
+# footing so a model can compare them without hand-aligning timestamps or units.
+# They stay strictly descriptive: correlation is not causation, and none of this
+# is diagnosis.
+
+# source key -> how to pull a dated numeric series from its table.
+_SERIES_SOURCES = {
+    "metric": {
+        "table": "metrics", "name_col": "metric", "ts_col": "ts",
+        "value_col": "value", "unit_col": "unit",
+        "date_mode": "full", "coalesce_created": False, "has_ref": False,
+    },
+    "wearable": {
+        "table": "wearable_samples", "name_col": "sample_type", "ts_col": "start_ts",
+        "value_col": "value", "unit_col": "unit",
+        "date_mode": "full", "coalesce_created": False, "has_ref": False,
+    },
+    "lab": {
+        "table": "lab_results", "name_col": "analyte", "ts_col": "result_date",
+        "value_col": "numeric_value", "unit_col": "unit",
+        "date_mode": "date", "coalesce_created": True, "has_ref": True,
+    },
+    "biomarker": {
+        "table": "biomarkers", "name_col": "biomarker", "ts_col": "measured_date",
+        "value_col": "numeric_value", "unit_col": "unit",
+        "date_mode": "date", "coalesce_created": True, "has_ref": True,
+    },
+    "substance": {
+        "table": "substance_use_logs", "name_col": "substance", "ts_col": "timestamp",
+        "value_col": "amount", "unit_col": "unit",
+        "date_mode": "full", "coalesce_created": False, "has_ref": False,
+    },
+}
+
+_RESAMPLE_BUCKETS = ("day", "week", "month")
+_AGG_FUNCS = ("mean", "median", "sum", "min", "max", "first", "last", "count")
+
+
+def _series_source(source: str) -> tuple[str, dict]:
+    key = _required_text(source, "source", max_chars=40).strip().lower()
+    if key not in _SERIES_SOURCES:
+        allowed = "|".join(sorted(_SERIES_SOURCES))
+        raise ValueError(f"source must be one of {allowed}")
+    return key, _SERIES_SOURCES[key]
+
+
+def _to_full_ts(ts: str) -> str:
+    """Promote a date-only stamp to an ISO datetime; leave datetimes untouched."""
+    if ts and "T" not in ts and len(ts) >= 10:
+        return ts[:10] + "T00:00:00+00:00"
+    return ts
+
+
+def _resolve_series(conn, user: str, source: str | None, name: str | None,
+                    lo: str, hi: str) -> tuple[str, str, dict, list[dict]]:
+    """Pull one dated numeric series from any supported source, ascending by time.
+
+    Returns (source_key, normalized_name, source_config, items) where each item is
+    {ts, value, unit[, ref_low, ref_high]} and non-numeric rows are dropped."""
+    key, cfg = _series_source(source)
+    clean = _keyish(_required_text(name, "name"), "name")
+    ts_expr = f"COALESCE({cfg['ts_col']}, created_ts)" if cfg["coalesce_created"] else cfg["ts_col"]
+    cols = [f"{ts_expr} AS ts", f"{cfg['value_col']} AS value", f"{cfg['unit_col']} AS unit"]
+    if cfg["has_ref"]:
+        cols += ["ref_low AS ref_low", "ref_high AS ref_high"]
+    sql = (
+        f"SELECT {', '.join(cols)} FROM {cfg['table']} "
+        f"WHERE user=? AND {cfg['name_col']}=? AND {cfg['value_col']} IS NOT NULL"
+    )
+    args: list = [user, clean]
+    if cfg["date_mode"] == "date":
+        sql += f" AND substr({ts_expr}, 1, 10) BETWEEN ? AND ?"
+        args += [lo.split("T", 1)[0], hi.split("T", 1)[0]]
+    else:
+        sql += f" AND {cfg['ts_col']} BETWEEN ? AND ?"
+        args += [lo, hi]
+    sql += f" ORDER BY {ts_expr} ASC"
+    items: list[dict] = []
+    for r in _rows(conn.execute(sql, args)):
+        ts = r.get("ts")
+        if ts is None:
+            continue
+        item = {"ts": _to_full_ts(ts), "value": float(r["value"]), "unit": r.get("unit")}
+        if cfg["has_ref"]:
+            item["ref_low"] = r.get("ref_low")
+            item["ref_high"] = r.get("ref_high")
+        items.append(item)
+    return key, clean, cfg, items
+
+
+def _bucket_key(ts: str, bucket: str) -> str:
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if bucket == "day":
+        return dt.date().isoformat()
+    if bucket == "week":
+        return dt.strftime("%G-W%V")
+    if bucket == "month":
+        return dt.strftime("%Y-%m")
+    raise ValueError(f"resample must be one of {'|'.join(_RESAMPLE_BUCKETS)}")
+
+
+def _agg_values(values: list[float], agg: str) -> float:
+    if agg == "mean":
+        return statistics.fmean(values)
+    if agg == "median":
+        return statistics.median(values)
+    if agg == "sum":
+        return float(sum(values))
+    if agg == "min":
+        return min(values)
+    if agg == "max":
+        return max(values)
+    if agg == "first":
+        return values[0]
+    if agg == "last":
+        return values[-1]
+    if agg == "count":
+        return float(len(values))
+    raise ValueError(f"agg must be one of {'|'.join(_AGG_FUNCS)}")
+
+
+def _resample_series(items: list[dict], bucket: str, agg: str) -> dict[str, float]:
+    """Collapse resolved items to one value per time bucket (items are time-ordered)."""
+    grouped: dict[str, list[float]] = {}
+    for it in items:
+        grouped.setdefault(_bucket_key(it["ts"], bucket), []).append(it["value"])
+    return {k: round(_agg_values(v, agg), 6) for k, v in grouped.items()}
+
+
+def _rankdata(values: list[float]) -> list[float]:
+    """Average ranks (ties share the mean rank), 1-based — for Spearman."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg_rank
+        i = j + 1
+    return ranks
+
+
+def _pearson_r(xs: list[float], ys: list[float]) -> float | None:
+    n = len(xs)
+    if n < 2:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    return sxy / math.sqrt(sxx * syy)
+
+
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction for the incomplete beta function (Numerical Recipes)."""
+    fpmin = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, 300):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 3e-16:
+            break
+    return h
+
+
+def _betai(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta I_x(a, b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    lbeta = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+    front = math.exp(lbeta + a * math.log(x) + b * math.log(1.0 - x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1.0 - x) / b
+
+
+def _t_two_sided_p(t: float, df: float) -> float | None:
+    """Two-sided p-value for a Student-t statistic with df degrees of freedom."""
+    if df <= 0:
+        return None
+    if not math.isfinite(t):
+        return 0.0
+    return round(_betai(df / 2.0, 0.5, df / (df + t * t)), 6)
+
+
+def _corr_p_value(r: float, n: int) -> float | None:
+    df = n - 2
+    if df <= 0:
+        return None
+    if abs(r) >= 1.0:
+        return 0.0
+    t = r * math.sqrt(df / (1.0 - r * r))
+    return _t_two_sided_p(t, df)
+
+
+def _corr_strength(r: float) -> str:
+    a = abs(r)
+    if a < 0.1:
+        return "negligible"
+    if a < 0.3:
+        return "weak"
+    if a < 0.5:
+        return "moderate"
+    if a < 0.7:
+        return "strong"
+    return "very strong"
+
+
+def _group_stats(items: list[dict]) -> dict:
+    values = [it["value"] for it in items]
+    n = len(values)
+    if n == 0:
+        return {"count": 0}
+    stats = {
+        "count": n,
+        "first_ts": items[0]["ts"],
+        "last_ts": items[-1]["ts"],
+        "min": round(min(values), 4),
+        "max": round(max(values), 4),
+        "mean": round(statistics.fmean(values), 4),
+        "median": round(statistics.median(values), 4),
+        "stdev": round(statistics.stdev(values), 4) if n > 1 else 0.0,
+        "trend": _linreg_per_day([(it["ts"], it["value"]) for it in items]) if n >= 2 else None,
+    }
+    return stats
+
+
+def _welch_t(a_vals: list[float], b_vals: list[float]) -> dict | None:
+    """Welch's unequal-variance t-test for a difference in means."""
+    na, nb = len(a_vals), len(b_vals)
+    if na < 2 or nb < 2:
+        return None
+    va, vb = statistics.variance(a_vals), statistics.variance(b_vals)
+    se2 = va / na + vb / nb
+    if se2 <= 0:
+        return None
+    t = (statistics.fmean(b_vals) - statistics.fmean(a_vals)) / math.sqrt(se2)
+    df_den = (va / na) ** 2 / (na - 1) + (vb / nb) ** 2 / (nb - 1)
+    df = (se2 ** 2) / df_den if df_den > 0 else float(na + nb - 2)
+    return {"t": round(t, 4), "df": round(df, 2), "p_value": _t_two_sided_p(t, df)}
+
+
+# --- unit + reference normalization -----------------------------------------
+_UNIT_ALIASES = {
+    "mgdl": "mg/dl", "mg/dl": "mg/dl", "mg/dL": "mg/dl",
+    "gdl": "g/dl", "g/dl": "g/dl", "gl": "g/l", "g/l": "g/l",
+    "mgl": "mg/l", "mg/l": "mg/l",
+    "ug/ml": "ug/ml", "mcg/ml": "ug/ml", "ug/dl": "ug/dl", "mcg/dl": "ug/dl",
+    "ug/l": "ug/l", "mcg/l": "ug/l", "ng/ml": "ng/ml", "ng/dl": "ng/dl", "pg/ml": "pg/ml",
+    "mmol/l": "mmol/l", "mmoll": "mmol/l", "umol/l": "umol/l", "mcmol/l": "umol/l",
+    "nmol/l": "nmol/l", "pmol/l": "pmol/l", "mol/l": "mol/l",
+    "percent": "%", "%": "%", "pct": "%",
+    "kg": "kg", "kgs": "kg", "g": "g", "gram": "g", "grams": "g",
+    "mg": "mg", "ug": "ug", "mcg": "ug", "lb": "lb", "lbs": "lb", "pound": "lb", "pounds": "lb",
+    "oz": "oz", "ounce": "oz", "ounces": "oz",
+    "cm": "cm", "m": "m", "mm": "mm", "in": "in", "inch": "in", "inches": "in", "ft": "ft",
+    "l": "l", "liter": "l", "litre": "l", "dl": "dl", "ml": "ml",
+    "c": "c", "celsius": "c", "centigrade": "c", "f": "f", "fahrenheit": "f", "k": "k", "kelvin": "k",
+    "bpm": "bpm", "mmhg": "mmhg", "count": "count", "steps": "count",
+}
+
+# linear-conversion families: unit -> multiplier to the family's base unit.
+_DIMENSIONS = {
+    "mass": {"kg": 1000.0, "g": 1.0, "mg": 1e-3, "ug": 1e-6, "lb": 453.59237, "oz": 28.349523125},
+    "length": {"m": 1.0, "cm": 0.01, "mm": 1e-3, "in": 0.0254, "ft": 0.3048},
+    "volume": {"l": 1.0, "dl": 0.1, "ml": 1e-3},
+    # mass concentration, base g/L
+    "mass_conc": {"g/l": 1.0, "g/dl": 10.0, "mg/dl": 0.01, "mg/l": 1e-3,
+                  "ug/ml": 1e-3, "ug/dl": 1e-5, "ug/l": 1e-6,
+                  "ng/ml": 1e-6, "ng/dl": 1e-8, "pg/ml": 1e-9},
+    # molar concentration, base mol/L
+    "molar_conc": {"mol/l": 1.0, "mmol/l": 1e-3, "umol/l": 1e-6, "nmol/l": 1e-9, "pmol/l": 1e-12},
+}
+_MASS_CONC = _DIMENSIONS["mass_conc"]
+_MOLAR_CONC = _DIMENSIONS["molar_conc"]
+
+# molar masses (g/mol) that enable mass<->molar concentration bridging per analyte.
+_ANALYTE_MW = {
+    "glucose": 180.16,
+    "cholesterol": 386.65, "total_cholesterol": 386.65,
+    "hdl": 386.65, "hdl_cholesterol": 386.65, "ldl": 386.65, "ldl_cholesterol": 386.65,
+    "triglycerides": 885.4, "triglyceride": 885.4,
+    "creatinine": 113.12, "uric_acid": 168.11, "calcium": 40.08,
+    "urea": 60.06, "bilirubin": 584.66, "total_bilirubin": 584.66,
+    "testosterone": 288.42, "cortisol": 362.46,
+}
+_TEMP_UNITS = ("c", "f", "k")
+
+
+def _norm_unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    u = str(unit).strip().lower().replace("µ", "u").replace("μ", "u").replace("°", "")
+    u = u.replace(" ", "")
+    if not u:
+        return None
+    return _UNIT_ALIASES.get(u, u)
+
+
+def _temp_convert(value: float, frm: str, to: str) -> float | None:
+    if frm == "c":
+        c = value
+    elif frm == "f":
+        c = (value - 32.0) * 5.0 / 9.0
+    elif frm == "k":
+        c = value - 273.15
+    else:
+        return None
+    return {"c": c, "f": c * 9.0 / 5.0 + 32.0, "k": c + 273.15}.get(to)
+
+
+def _convert_value(value: float | None, from_unit: str | None, to_unit: str | None,
+                   analyte: str | None = None) -> tuple[float | None, bool, str]:
+    """Convert a value between units. Returns (converted, ok, method_tag).
+
+    Handles same-unit identity, temperature, linear families (mass, length,
+    volume, mass/molar concentration), and analyte-aware mass<->molar bridging.
+    Never guesses: an unknown pairing returns (None, False, reason)."""
+    if value is None:
+        return None, False, "no_value"
+    frm, to = _norm_unit(from_unit), _norm_unit(to_unit)
+    if frm == to:
+        return value, True, "identity"
+    if frm is None or to is None:
+        return None, False, "unknown_unit"
+    if frm in _TEMP_UNITS and to in _TEMP_UNITS:
+        r = _temp_convert(value, frm, to)
+        return (r, r is not None, "temperature")
+    for dim, table in _DIMENSIONS.items():
+        if frm in table and to in table:
+            return value * table[frm] / table[to], True, dim
+    mw = _ANALYTE_MW.get(analyte) if analyte else None
+    if mw:
+        if frm in _MASS_CONC and to in _MOLAR_CONC:
+            mol_per_l = (value * _MASS_CONC[frm]) / mw
+            return mol_per_l / _MOLAR_CONC[to], True, "molar_from_mass"
+        if frm in _MOLAR_CONC and to in _MASS_CONC:
+            g_per_l = (value * _MOLAR_CONC[frm]) * mw
+            return g_per_l / _MASS_CONC[to], True, "mass_from_molar"
+    return None, False, "no_conversion"
+
+
+@mcp.tool(annotations={"title": "Correlate two signals", "readOnlyHint": True, "idempotentHint": True})
+def correlate_metrics(
+    source_a: str,
+    name_a: str,
+    source_b: str,
+    name_b: str,
+    since: str | None = None,
+    until: str | None = None,
+    resample: str = "day",
+    agg: str = "mean",
+    method: str = "both",
+    lag_days: int = 0,
+    user: str | None = None,
+) -> dict:
+    """Correlate two health signals aligned onto a common time grid.
+
+    Resamples each signal to one value per `resample` bucket (day/week/month)
+    with `agg`, inner-joins the buckets they share, then computes Pearson and/or
+    Spearman correlation with a two-sided p-value and the paired sample size.
+    Either signal may come from any source: metric, wearable, lab, biomarker,
+    substance.
+
+    Args:
+        source_a / name_a: first signal, e.g. source='metric' name='weight_kg'.
+        source_b / name_b: second signal, e.g. source='lab' name='a1c_percent'.
+        since / until: ISO8601 or 'YYYY-MM-DD' bounds (inclusive).
+        resample: 'day' | 'week' | 'month' bucket granularity.
+        agg: how to collapse multiple readings in a bucket
+             ('mean','median','sum','min','max','first','last','count').
+        method: 'pearson' | 'spearman' | 'both'.
+        lag_days: only with resample='day'. Positive values pair each A bucket
+            with the B bucket `lag_days` days earlier (tests whether B leads A).
+        user: which person; defaults to the primary user.
+
+    Correlation is descriptive association, never causation or diagnosis.
+    """
+    u = _tool_user(user, "correlate_metrics")
+    if resample not in _RESAMPLE_BUCKETS:
+        raise ValueError(f"resample must be one of {'|'.join(_RESAMPLE_BUCKETS)}")
+    if method not in ("pearson", "spearman", "both"):
+        raise ValueError("method must be pearson|spearman|both")
+    if agg not in _AGG_FUNCS:
+        raise ValueError(f"agg must be one of {'|'.join(_AGG_FUNCS)}")
+    lag = int(lag_days)
+    if lag and resample != "day":
+        raise ValueError("lag_days is only supported with resample='day'")
+    lo, hi = _range_bounds(since, until)
+    with _db() as conn:
+        skey_a, clean_a, _, items_a = _resolve_series(conn, u, source_a, name_a, lo, hi)
+        skey_b, clean_b, _, items_b = _resolve_series(conn, u, source_b, name_b, lo, hi)
+    _audit("correlate_metrics",
+           f"{_audit_user(u)} a_hash={_fingerprint(clean_a)} b_hash={_fingerprint(clean_b)} "
+           f"resample={resample} agg={agg} lag={lag}")
+    grid_a = _resample_series(items_a, resample, agg)
+    grid_b = _resample_series(items_b, resample, agg)
+
+    def _shift(key: str) -> str:
+        if not lag:
+            return key
+        return (datetime.fromisoformat(key).date() - timedelta(days=lag)).isoformat()
+
+    paired = [(k, grid_a[k], grid_b[_shift(k)]) for k in sorted(grid_a) if _shift(k) in grid_b]
+    xs = [p[1] for p in paired]
+    ys = [p[2] for p in paired]
+    result = {
+        "user": u,
+        "series_a": {"source": skey_a, "name": clean_a,
+                     "unit": items_a[-1]["unit"] if items_a else None,
+                     "n_readings": len(items_a), "n_buckets": len(grid_a)},
+        "series_b": {"source": skey_b, "name": clean_b,
+                     "unit": items_b[-1]["unit"] if items_b else None,
+                     "n_readings": len(items_b), "n_buckets": len(grid_b)},
+        "resample": resample, "agg": agg, "lag_days": lag,
+        "paired_n": len(paired),
+        "overlap": ({"first_bucket": paired[0][0], "last_bucket": paired[-1][0]}
+                    if paired else None),
+        "disclaimer": "Descriptive association only; correlation is not causation or diagnosis.",
+    }
+    caveats: list[str] = []
+    if len(paired) < 3:
+        result["message"] = "need at least 3 shared buckets to correlate"
+        caveats.append("Too few overlapping points for a meaningful correlation.")
+        result["caveats"] = caveats
+        return result
+    if len(paired) < 10:
+        caveats.append(f"Only {len(paired)} paired points; the estimate is unstable and "
+                       "p-values are rough.")
+    caveats.append("Time-series points are autocorrelated, so true significance is weaker "
+                   "than the p-value suggests.")
+    if method in ("pearson", "both"):
+        r = _pearson_r(xs, ys)
+        if r is None:
+            result["pearson"] = None
+            caveats.append("Pearson undefined: a series had zero variance over the shared buckets.")
+        else:
+            result["pearson"] = {
+                "r": round(r, 4), "p_value": _corr_p_value(r, len(paired)),
+                "df": len(paired) - 2, "strength": _corr_strength(r),
+                "direction": "positive" if r > 0 else ("negative" if r < 0 else "none"),
+            }
+    if method in ("spearman", "both"):
+        rho = _pearson_r(_rankdata(xs), _rankdata(ys))
+        if rho is None:
+            result["spearman"] = None
+        else:
+            result["spearman"] = {
+                "rho": round(rho, 4), "p_value": _corr_p_value(rho, len(paired)),
+                "strength": _corr_strength(rho),
+                "direction": "positive" if rho > 0 else ("negative" if rho < 0 else "none"),
+            }
+    result["caveats"] = caveats
+    return result
+
+
+@mcp.tool(annotations={"title": "Analyze event impact", "readOnlyHint": True, "idempotentHint": True})
+def analyze_event_impact(
+    name: str,
+    event_date: str,
+    source: str = "metric",
+    event_label: str | None = None,
+    window_days: int | None = None,
+    washout_days: int = 0,
+    user: str | None = None,
+) -> dict:
+    """Estimate a signal's before/after change around a discrete event.
+
+    Splits one signal at an anchor date (e.g. a medication start, procedure, or
+    regimen change) into 'before' and 'after' groups, reports descriptive stats
+    for each, and adds the difference in means plus a Welch t-test.
+
+    Args:
+        name: the signal name, e.g. 'resting_heart_rate' or 'a1c_percent'.
+        event_date: the anchor date (ISO8601 or 'YYYY-MM-DD').
+        source: 'metric' | 'wearable' | 'lab' | 'biomarker' | 'substance'.
+        event_label: optional description of the event, echoed in the response.
+        window_days: if set, only include readings within this many days on each
+            side of the event; omit to use all available history.
+        washout_days: exclude readings within this many days of the event on both
+            sides (a washout gap) to skip transition-period noise.
+        user: which person; defaults to the primary user.
+
+    A before/after difference is descriptive, never proof the event caused it.
+    """
+    u = _tool_user(user, "analyze_event_impact")
+    anchor = _parse_ts(event_date)
+    anchor_dt = datetime.fromisoformat(anchor)
+    wd = int(window_days) if window_days is not None else None
+    wash = max(0, int(washout_days))
+    if wd is not None:
+        lo = (anchor_dt - timedelta(days=wd)).isoformat()
+        hi = (anchor_dt + timedelta(days=wd)).replace(hour=23, minute=59, second=59).isoformat()
+    else:
+        lo, hi = _range_bounds(None, None)
+    with _db() as conn:
+        skey, clean, cfg, items = _resolve_series(conn, u, source, name, lo, hi)
+    _audit("analyze_event_impact",
+           f"{_audit_user(u)} source={skey} name_hash={_fingerprint(clean)} washout={wash}")
+    before, after = [], []
+    for it in items:
+        it_dt = datetime.fromisoformat(it["ts"])
+        if wash and abs((it_dt - anchor_dt).total_seconds()) / 86400.0 < wash:
+            continue
+        (before if it_dt < anchor_dt else after).append(it)
+    out = {
+        "user": u,
+        "source": skey,
+        "name": clean,
+        "event": {"date": anchor, "label": event_label},
+        "unit": items[-1]["unit"] if items else None,
+        "window_days": wd,
+        "washout_days": wash,
+        "before": _group_stats(before),
+        "after": _group_stats(after),
+        "disclaimer": "Descriptive before/after comparison; not proof of causation or medical advice.",
+    }
+    if before and after:
+        mb, ma = out["before"]["mean"], out["after"]["mean"]
+        change = round(ma - mb, 4)
+        out["change"] = {
+            "mean_before": mb,
+            "mean_after": ma,
+            "absolute_change": change,
+            "percent_change": round((change / mb) * 100.0, 2) if mb else None,
+            "direction": "increase" if change > 0 else ("decrease" if change < 0 else "no change"),
+        }
+        welch = _welch_t([it["value"] for it in before], [it["value"] for it in after])
+        if welch:
+            out["change"]["welch_t_test"] = welch
+    else:
+        out["message"] = "need readings on both sides of the event to compare"
+    return out
+
+
+@mcp.tool(annotations={"title": "Align multiple signals", "readOnlyHint": True, "idempotentHint": True})
+def align_series(
+    series_json: str,
+    since: str | None = None,
+    until: str | None = None,
+    resample: str = "day",
+    agg: str = "mean",
+    join: str = "outer",
+    limit: int = 500,
+    user: str | None = None,
+) -> dict:
+    """Resample 2+ signals onto one shared time grid for side-by-side comparison.
+
+    Takes a JSON array of signal specs and returns a single aligned table — one
+    row per time bucket, one column per signal — so signals can be compared
+    without hand-matching timestamps.
+
+    Args:
+        series_json: JSON array of specs, each {"source","name"} with optional
+            "label" and per-series "agg". Example:
+            '[{"source":"metric","name":"weight_kg"},
+              {"source":"lab","name":"a1c_percent","agg":"last"}]'
+        since / until: ISO8601 or 'YYYY-MM-DD' bounds (inclusive).
+        resample: 'day' | 'week' | 'month' bucket granularity.
+        agg: default bucket aggregation ('mean','median','sum','min','max',
+             'first','last','count'); a spec's own "agg" overrides it.
+        join: 'outer' (every bucket any signal has, missing entries null) or
+              'inner' (only buckets every signal shares).
+        limit: max rows returned (the most recent are kept if exceeded).
+        user: which person; defaults to the primary user.
+
+    Aligned descriptive values only; not diagnosis or medical advice.
+    """
+    u = _tool_user(user, "align_series")
+    if resample not in _RESAMPLE_BUCKETS:
+        raise ValueError(f"resample must be one of {'|'.join(_RESAMPLE_BUCKETS)}")
+    if join not in ("outer", "inner"):
+        raise ValueError("join must be outer|inner")
+    if agg not in _AGG_FUNCS:
+        raise ValueError(f"agg must be one of {'|'.join(_AGG_FUNCS)}")
+    specs = _json_list(series_json, "series_json")
+    if not 1 <= len(specs) <= 8:
+        raise ValueError("series_json must contain between 1 and 8 signal specs")
+    lim = _limit(limit, default=500)
+    lo, hi = _range_bounds(since, until)
+    grids: list[tuple[str, dict]] = []
+    meta: list[dict] = []
+    used_labels: set[str] = set()
+    with _db() as conn:
+        for spec in specs:
+            if not isinstance(spec, dict):
+                raise ValueError("each series spec must be a JSON object")
+            skey, clean, cfg, items = _resolve_series(
+                conn, u, spec.get("source"), spec.get("name"), lo, hi)
+            spec_agg = spec.get("agg", agg)
+            if spec_agg not in _AGG_FUNCS:
+                raise ValueError(f"agg must be one of {'|'.join(_AGG_FUNCS)}")
+            label = _optional_text(spec.get("label"), "label", max_chars=60) or f"{skey}:{clean}"
+            base, n = label, 2
+            while label in used_labels:
+                label = f"{base}#{n}"
+                n += 1
+            used_labels.add(label)
+            grid = _resample_series(items, resample, spec_agg)
+            grids.append((label, grid))
+            meta.append({"label": label, "source": skey, "name": clean,
+                         "unit": items[-1]["unit"] if items else None, "agg": spec_agg,
+                         "n_readings": len(items), "n_buckets": len(grid)})
+    _audit("align_series", f"{_audit_user(u)} series={len(specs)} resample={resample} join={join}")
+    if join == "inner":
+        keys: set | None = None
+        for _, g in grids:
+            keys = set(g) if keys is None else (keys & set(g))
+        ordered = sorted(keys or set())
+    else:
+        allk: set = set()
+        for _, g in grids:
+            allk |= set(g)
+        ordered = sorted(allk)
+    total = len(ordered)
+    truncated = total > lim
+    if truncated:
+        ordered = ordered[-lim:]
+    grid_rows = [{"bucket": k, **{label: g.get(k) for label, g in grids}} for k in ordered]
+    return {
+        "user": u,
+        "resample": resample,
+        "default_agg": agg,
+        "join": join,
+        "series": meta,
+        "bucket_count": total,
+        "returned": len(grid_rows),
+        "truncated": truncated,
+        "grid": grid_rows,
+        "disclaimer": "Aligned descriptive values only; not diagnosis or medical advice.",
+    }
+
+
+@mcp.tool(annotations={"title": "Normalize units & ranges", "readOnlyHint": True, "idempotentHint": True})
+def normalize_series(
+    name: str,
+    source: str = "lab",
+    to_unit: str | None = None,
+    analyte: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 200,
+    user: str | None = None,
+) -> dict:
+    """Reconcile mixed units and reference ranges within one signal.
+
+    Pulls a signal's readings, converts every value (and its reference range, for
+    labs/biomarkers) to a single common unit, and adds a unitless 'reference
+    position' so readings taken with different units or reference ranges become
+    directly comparable.
+
+    Args:
+        name: the signal name, e.g. 'glucose' or 'a1c_percent'.
+        source: 'lab' | 'biomarker' | 'metric' | 'wearable' | 'substance'.
+        to_unit: target unit for all values; omit to use the most common unit
+            already present in the series.
+        analyte: analyte hint (e.g. 'glucose', 'cholesterol', 'creatinine') that
+            unlocks mass<->molar conversions like mg/dL<->mmol/L; defaults to the
+            signal name.
+        since / until: ISO8601 or 'YYYY-MM-DD' bounds (inclusive).
+        limit: max readings to return.
+        user: which person; defaults to the primary user.
+
+    'reference position' is 0 at the lower reference bound and 1 at the upper.
+    Descriptive normalization only; not interpretation or diagnosis.
+    """
+    u = _tool_user(user, "normalize_series")
+    lim = _limit(limit, default=200)
+    lo, hi = _range_bounds(since, until)
+    with _db() as conn:
+        skey, clean, cfg, items = _resolve_series(conn, u, source, name, lo, hi)
+    _audit("normalize_series", f"{_audit_user(u)} source={skey} name_hash={_fingerprint(clean)}")
+    if not items:
+        return {"user": u, "source": skey, "name": clean, "count": 0}
+    analyte_key = _keyish(analyte, "analyte") if analyte else clean
+    units_seen: dict = {}
+    for it in items:
+        nu = _norm_unit(it["unit"])
+        units_seen[nu] = units_seen.get(nu, 0) + 1
+    if to_unit is not None:
+        target = _norm_unit(to_unit)
+    else:
+        ranked = sorted(units_seen.items(), key=lambda kv: (kv[0] is None, -kv[1]))
+        target = ranked[0][0] if ranked else None
+    rows: list[dict] = []
+    converted_values: list[float] = []
+    unconverted: set[str] = set()
+    for it in items[-lim:]:
+        conv_val, ok, tag = _convert_value(it["value"], it["unit"], target, analyte_key)
+        row = {
+            "ts": it["ts"],
+            "original_value": round(it["value"], 6),
+            "original_unit": it["unit"],
+            "value": round(conv_val, 6) if (ok and conv_val is not None) else None,
+            "unit": target,
+            "converted": bool(ok and conv_val is not None),
+            "conversion": tag,
+        }
+        if cfg["has_ref"]:
+            rl, rh = it.get("ref_low"), it.get("ref_high")
+            rl_c = _convert_value(rl, it["unit"], target, analyte_key)[0] if rl is not None else None
+            rh_c = _convert_value(rh, it["unit"], target, analyte_key)[0] if rh is not None else None
+            row["ref_low"] = round(rl_c, 6) if rl_c is not None else None
+            row["ref_high"] = round(rh_c, 6) if rh_c is not None else None
+            base_val = row["value"] if row["value"] is not None else it["value"]
+            base_lo = rl_c if rl_c is not None else rl
+            base_hi = rh_c if rh_c is not None else rh
+            if base_lo is not None and base_hi is not None and base_hi != base_lo:
+                row["reference_position"] = round((base_val - base_lo) / (base_hi - base_lo), 4)
+                row["in_range"] = bool(base_lo <= base_val <= base_hi)
+        if row["converted"]:
+            converted_values.append(row["value"])
+        else:
+            unconverted.add(it["unit"] or "unitless")
+        rows.append(row)
+    summary = {
+        "user": u,
+        "source": skey,
+        "name": clean,
+        "analyte_hint": analyte_key,
+        "target_unit": target,
+        "units_seen": {(k or "unitless"): v for k, v in units_seen.items()},
+        "count": len(rows),
+        "converted_count": len(converted_values),
+        "unconverted_units": sorted(unconverted),
+        "rows": rows,
+        "disclaimer": "Unit/reference normalization only; not interpretation or diagnosis.",
+    }
+    if converted_values:
+        summary["normalized_stats"] = {
+            "unit": target,
+            "min": round(min(converted_values), 4),
+            "max": round(max(converted_values), 4),
+            "mean": round(statistics.fmean(converted_values), 4),
+            "median": round(statistics.median(converted_values), 4),
+        }
+    return summary
 
 
 @mcp.tool(annotations={"title": "Health MCP status", "readOnlyHint": True, "idempotentHint": True})

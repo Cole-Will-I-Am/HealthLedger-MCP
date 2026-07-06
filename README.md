@@ -10,7 +10,7 @@ claude.ai custom connector) can log, retrieve, and reason over that record on de
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-67-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-71-0EA5E9)](#-tool-catalog)
 [![Auth](https://img.shields.io/badge/auth-GitHub%20OAuth-181717?logo=github&logoColor=white)](#-security-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
 [![Status](https://img.shields.io/badge/status-fail--closed-16A34A)](#-security-model)
@@ -35,6 +35,7 @@ and shares its security model.
 | 🔐 **Private by construction** | Binds `127.0.0.1` only; reachable exclusively through your Cloudflare Tunnel + OAuth allow-list. |
 | 🧱 **Structured clinical schema** | 20+ dedicated tables (conditions, meds, labs, biomarkers, oncology, imaging, wearables, …) rather than a bag of notes. |
 | 📈 **Analysis-ready** | Trend tools compute count / min / max / mean / median plus a least-squares slope over dated numeric values. |
+| 🔗 **Cross-signal reasoning** | Correlate two signals, estimate before/after change around an event, align many signals onto one time grid, and reconcile units & reference ranges — across metrics, wearables, labs, biomarkers, and substances. |
 | 🧑‍🤝‍🧑 **Multi-person** | Every tool takes an optional `user` label, so one server can hold a whole household. |
 | 🧾 **Auditable** | Every tool call is appended to `audit.log`; daily SQLite backups run on a timer. |
 | 🚪 **Fail-closed** | Refuses to start without real OAuth credentials — no accidental open endpoint. |
@@ -145,7 +146,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**67 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**71 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -184,6 +185,12 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 </details>
 
 <details>
+<summary><b>🔗 Cross-signal reasoning</b></summary>
+
+`correlate_metrics` · `analyze_event_impact` · `align_series` · `normalize_series`
+</details>
+
+<details>
 <summary><b>🗓️ Planning, whole-record views &amp; operations</b></summary>
 
 `add_care_task` · `complete_care_task` · `list_care_tasks` · `list_due_tasks` ·
@@ -196,6 +203,10 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 | Tool | What it returns |
 |---|---|
 | `analyze_*_trend` / `analyze_metric` | count · min · max · mean · median · least-squares slope over dated numeric values |
+| `correlate_metrics` | Pearson & Spearman between two signals aligned on a common time grid, with paired sample size, a two-sided p-value, and significance caveats |
+| `analyze_event_impact` | before/after descriptive stats around a discrete event (med start, procedure) plus the difference in means and a Welch t-test |
+| `align_series` | 2+ signals resampled onto one shared day/week/month grid — one row per bucket, one column per signal (inner or outer join) |
+| `normalize_series` | one signal's readings converted to a common unit (incl. mg/dL↔mmol/L via analyte molar mass) with reference ranges reconciled and a unitless in-range position |
 | `summarize_health` | compact cross-domain digest of the record |
 | `health_agenda` | stored upcoming tasks, refills, follow-ups, immunizations, reproductive due dates |
 | `care_gap_report` | missing/stale stored data and unresolved follow-ups — **without** clinical screening claims |

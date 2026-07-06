@@ -256,6 +256,50 @@ with tempfile.TemporaryDirectory() as tmp:
     check("wearable trend works", wearable_trend["count"] == 2 and wearable_trend["trend"]["direction"] == "rising",
           str(wearable_trend))
 
+    # --- cross-signal reasoning -------------------------------------------
+    for i, (w, g) in enumerate([(80.0, 5.4), (81.0, 5.6), (82.0, 5.9), (83.0, 6.1), (84.5, 6.4)]):
+        d = f"2026-0{i + 1}-15"
+        server.log_metric("weight_kg", w, "kg", timestamp=f"{d}T08:00:00Z", user="xsig")
+        server.add_lab_result("A1C Percent", str(g), unit="%", result_date=d,
+                              ref_low=4.0, ref_high=5.6, user="xsig")
+    corr = server.correlate_metrics("metric", "weight_kg", "lab", "a1c percent",
+                                    resample="month", user="xsig")
+    check("correlate pairs monthly buckets", corr["paired_n"] == 5, str(corr))
+    check("correlate finds strong positive Pearson",
+          corr["pearson"]["r"] > 0.9 and corr["pearson"]["direction"] == "positive", str(corr))
+    check("correlate reports a numeric p-value", isinstance(corr["pearson"]["p_value"], float), str(corr))
+    check("correlate computes Spearman too", corr["spearman"]["rho"] > 0.9, str(corr))
+    check("correlate carries autocorrelation caveat",
+          any("autocorrelated" in c for c in corr["caveats"]), str(corr))
+
+    impact = server.analyze_event_impact("weight_kg", "2026-03-20", source="metric",
+                                         event_label="regimen change", user="xsig")
+    check("event impact splits before/after",
+          impact["before"]["count"] == 3 and impact["after"]["count"] == 2, str(impact))
+    check("event impact reports a mean increase",
+          impact["change"]["direction"] == "increase" and impact["change"]["absolute_change"] > 0,
+          str(impact))
+
+    aligned = server.align_series(json.dumps([
+        {"source": "metric", "name": "weight_kg"},
+        {"source": "lab", "name": "a1c percent", "agg": "last", "label": "a1c"},
+    ]), resample="month", join="inner", user="xsig")
+    check("align_series inner-joins shared buckets", aligned["returned"] == 5, str(aligned))
+    check("align_series exposes both signals",
+          all("a1c" in r and "metric:weight_kg" in r for r in aligned["grid"]), str(aligned))
+
+    server.add_lab_result("glucose", "90", unit="mg/dL", result_date="2026-01-10",
+                          ref_low=70, ref_high=99, user="xsig")
+    server.add_lab_result("glucose", "5.5", unit="mmol/L", result_date="2026-02-10",
+                          ref_low=3.9, ref_high=5.5, user="xsig")
+    norm = server.normalize_series("glucose", source="lab", to_unit="mg/dL", user="xsig")
+    check("normalize collapses to one unit",
+          norm["target_unit"] == "mg/dl" and norm["converted_count"] == 2, str(norm))
+    mmol_row = [r for r in norm["rows"] if r["original_unit"] == "mmol/L"][0]
+    check("normalize mmol/L -> mg/dL via molar mass", abs(mmol_row["value"] - 99.09) < 1.5, str(mmol_row))
+    check("normalize computes reference position",
+          all("reference_position" in r for r in norm["rows"]), str(norm))
+
     search = server.search_records("pathology")
     check("search includes new domains", search["documents"] and search["tumors"], str(search))
     search_mri = server.search_records("mri")

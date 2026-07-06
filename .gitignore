@@ -11,7 +11,7 @@ health.db-*
 audit.log
 backups/
 
-server.py.bak.*
+*.bak.*
 deepseek-*.md
 
 .DS_Store
