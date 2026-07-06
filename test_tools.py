@@ -300,6 +300,44 @@ with tempfile.TemporaryDirectory() as tmp:
     check("normalize computes reference position",
           all("reference_position" in r for r in norm["rows"]), str(norm))
 
+    # --- trend intelligence ------------------------------------------------
+    from datetime import datetime as _dt, timedelta as _tdelta
+    _base = _dt(2026, 1, 1, 8, 0, 0)
+    # a level shift (60s -> 70s) with one spike outlier
+    rhr = [58, 60, 59, 61, 60, 59, 62, 60, 74, 76, 75, 77, 120, 75, 76, 78]
+    for i, v in enumerate(rhr):
+        ts = (_base + _tdelta(days=i * 7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        server.log_metric("resting_heart_rate", v, "bpm", timestamp=ts, user="trend")
+    at = server.analyze_trend("resting_heart_rate", source="metric", user="trend")
+    check("analyze_trend slope carries a confidence interval + verdict",
+          "slope_ci95_per_day" in at["trend"] and "significant" in at["trend"]
+          and at["trend"]["direction"] == "rising", str(at["trend"]))
+    check("analyze_trend flags the outlier robustly",
+          at["outliers"]["count"] >= 1 and any(p["value"] == 120.0 for p in at["outliers"]["points"]),
+          str(at["outliers"]))
+    check("analyze_trend frames latest vs baseline median",
+          "position" in at["baseline"] and at["baseline"]["delta_vs_median"] > 0, str(at["baseline"]))
+    check("analyze_trend detects the regime change-point",
+          at["change_point"]["detected"] is True and at["change_point"]["mean_shift"] > 10,
+          str(at["change_point"]))
+    check("analyze_trend reports recent vs earlier rate",
+          at["rate_of_change"].get("recent_slope_per_day") is not None
+          and at["rate_of_change"].get("earlier_slope_per_day") is not None, str(at["rate_of_change"]))
+    # a U-shaped weight cycle: linear is the wrong model
+    cycle = [90, 86, 83, 81, 80, 80, 81, 83, 86, 90, 95]
+    for i, v in enumerate(cycle):
+        ts = (_base + _tdelta(days=i * 7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        server.log_metric("weight_cycle_kg", v, "kg", timestamp=ts, user="trend")
+    ac = server.analyze_trend("weight_cycle_kg", source="metric", user="trend")
+    check("analyze_trend warns when linear extrapolation is wrong",
+          ac["shape"]["curvature"]["curved"] is True
+          and ac["shape"]["linear_extrapolation_advised"] is False
+          and len(ac["shape"]["warnings"]) >= 1, str(ac["shape"]))
+    # slope confidence propagates to the simpler analyze_metric tool
+    am_trend = server.analyze_metric("resting_heart_rate", user="trend")["stats"]["trend"]
+    check("analyze_metric now carries slope confidence",
+          am_trend.get("r_squared") is not None and "significant" in am_trend, str(am_trend))
+
     search = server.search_records("pathology")
     check("search includes new domains", search["documents"] and search["tumors"], str(search))
     search_mri = server.search_records("mri")

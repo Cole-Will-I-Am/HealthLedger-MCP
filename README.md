@@ -10,7 +10,7 @@ claude.ai custom connector) can log, retrieve, and reason over that record on de
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-71-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-72-0EA5E9)](#-tool-catalog)
 [![Auth](https://img.shields.io/badge/auth-GitHub%20OAuth-181717?logo=github&logoColor=white)](#-security-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
 [![Status](https://img.shields.io/badge/status-fail--closed-16A34A)](#-security-model)
@@ -36,6 +36,7 @@ and shares its security model.
 | 🧱 **Structured clinical schema** | 20+ dedicated tables (conditions, meds, labs, biomarkers, oncology, imaging, wearables, …) rather than a bag of notes. |
 | 📈 **Analysis-ready** | Trend tools compute count / min / max / mean / median plus a least-squares slope over dated numeric values. |
 | 🔗 **Cross-signal reasoning** | Correlate two signals, estimate before/after change around an event, align many signals onto one time grid, and reconcile units & reference ranges — across metrics, wearables, labs, biomarkers, and substances. |
+| 📐 **Trend intelligence** | Slopes with a confidence interval and p-value (real trend vs noise), robust outlier flags, latest-vs-baseline framing, non-linear/cyclical warnings, and change-point detection — not just a bare fitted line. |
 | 🧑‍🤝‍🧑 **Multi-person** | Every tool takes an optional `user` label, so one server can hold a whole household. |
 | 🧾 **Auditable** | Every tool call is appended to `audit.log`; daily SQLite backups run on a timer. |
 | 🚪 **Fail-closed** | Refuses to start without real OAuth credentials — no accidental open endpoint. |
@@ -146,7 +147,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**71 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**72 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -185,9 +186,10 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 </details>
 
 <details>
-<summary><b>🔗 Cross-signal reasoning</b></summary>
+<summary><b>🔗 Cross-signal reasoning &amp; trend intelligence</b></summary>
 
-`correlate_metrics` · `analyze_event_impact` · `align_series` · `normalize_series`
+`correlate_metrics` · `analyze_event_impact` · `align_series` · `normalize_series` ·
+`analyze_trend`
 </details>
 
 <details>
@@ -202,7 +204,8 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 | Tool | What it returns |
 |---|---|
-| `analyze_*_trend` / `analyze_metric` | count · min · max · mean · median · least-squares slope over dated numeric values |
+| `analyze_*_trend` / `analyze_metric` | count · min · max · mean · median · least-squares slope over dated numeric values — the slope now carries a standard error, 95% CI, p-value, and R² so a trend can be told from noise |
+| `analyze_trend` | full trend intelligence for one signal: slope **with uncertainty** (SE, 95% CI, p-value, "distinguishable from flat / treat as noise") · robust median/MAD **outlier** flags · **baseline framing** (latest vs your own median & Q1–Q3) · **rate-of-change** (recent vs earlier slope) · **shape check** warning when a straight line is the wrong model for a bounded/cyclical signal · single **change-point** detection |
 | `correlate_metrics` | Pearson & Spearman between two signals aligned on a common time grid, with paired sample size, a two-sided p-value, and significance caveats |
 | `analyze_event_impact` | before/after descriptive stats around a discrete event (med start, procedure) plus the difference in means and a Welch t-test |
 | `align_series` | 2+ signals resampled onto one shared day/week/month grid — one row per bucket, one column per signal (inner or outer join) |
