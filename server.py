@@ -13,6 +13,7 @@ from healthledger.schema import _init_db  # noqa: F401
 from healthledger.server import main  # noqa: F401
 from healthledger.tools.core import *          # noqa: F401,F403
 from healthledger.tools.clinical import *      # noqa: F401,F403
+from healthledger.tools.genomics import *      # noqa: F401,F403
 from healthledger.tools.labs import *          # noqa: F401,F403
 from healthledger.tools.life import *          # noqa: F401,F403
 from healthledger.tools.crosssignal import *   # noqa: F401,F403

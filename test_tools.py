@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as tmp:
           str(export_page))
     export_all = server.export_data(limit=1)
     check("export_data all returns pages", {"events", "metrics", "notes", "medications", "lab_results",
-                                            "reproductive_records", "wearable_samples"}.issubset(set(export_all["pages"])),
+                                            "genomic_records", "reproductive_records", "wearable_samples"}.issubset(set(export_all["pages"])),
           str(export_all))
 
     med = server.add_medication(
@@ -183,6 +183,45 @@ with tempfile.TemporaryDirectory() as tmp:
           str(family_history))
     check("health records list", health_records["count"] == 1 and health_records["health_records"][0]["id"] == generic["id"],
           str(health_records))
+
+    variant = server.add_genomic_record(
+        "variant",
+        gene="BRCA1",
+        rsid="rs80357713",
+        hgvs_c="c.68_69delAG",
+        hgvs_p="p.Glu23ValfsTer17",
+        zygosity="heterozygous",
+        clinical_significance="pathogenic",
+        associated_condition="hereditary breast and ovarian cancer",
+        test_date="2026-07-01",
+        report_date="2026-07-06",
+        lab_name="Example Genetics",
+        methodology="targeted_panel",
+        source="genetic report",
+    )
+    pgx = server.add_genomic_record(
+        "pgx",
+        gene="CYP2C19",
+        rsid="rs4244285",
+        pgx_phenotype="poor metabolizer",
+        pgx_drug="clopidogrel",
+        pgx_guideline_source="CPIC",
+        test_date="2026-07-02",
+        report_date="2026-07-06",
+        lab_name="Example Genetics",
+        methodology="targeted_panel",
+    )
+    genomic_records = server.list_genomic_records()
+    pgx_records = server.list_genomic_records("pgx")
+    check("genomic variant stored",
+          variant["record_type"] == "variant" and variant["clinical_significance"] == "pathogenic",
+          str(variant))
+    check("genomic pgx stored", pgx["record_type"] == "pgx" and pgx["pgx_phenotype"] == "poor metabolizer",
+          str(pgx))
+    check("genomic records list", genomic_records["count"] == 2 and genomic_records["genomic_records"][0]["id"] == pgx["id"],
+          str(genomic_records))
+    check("genomic records filter", pgx_records["count"] == 1 and pgx_records["genomic_records"][0]["id"] == pgx["id"],
+          str(pgx_records))
 
     cycle1 = server.add_reproductive_record("cycle", start_date="2026-06-01", end_date="2026-06-05", flow_intensity="medium", pain_level=3)
     cycle2 = server.add_reproductive_record("cycle", start_date="2026-06-29", end_date="2026-07-03", flow_intensity="light", pain_level=2)
@@ -390,6 +429,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check("search includes imaging", search_mri["imaging_reports"], str(search_mri))
     search_family = server.search_records("diabetes")
     check("search includes family history", search_family["family_history"], str(search_family))
+    search_genomic = server.search_records("BRCA1")
+    check("search includes genomic records", search_genomic["genomic_records"], str(search_genomic))
     search_wearable = server.search_records("apple")
     check("search includes wearables", search_wearable["wearable_sources"] and search_wearable["wearable_samples"],
           str(search_wearable))
@@ -400,7 +441,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("summary includes full domains",
           summary["recent_biomarkers"] and summary["recent_procedures"] and summary["recent_imaging"]
           and summary["recent_documents"] and summary["family_history"]
-          and summary["recent_reproductive_records"] and summary["recent_substance_use"]
+          and summary["recent_genomic_records"] and summary["recent_reproductive_records"] and summary["recent_substance_use"]
           and summary["recent_wearable_samples"] and summary["wearable_types"],
           str(summary))
 

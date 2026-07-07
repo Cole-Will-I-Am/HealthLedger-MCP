@@ -331,6 +331,41 @@ def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_family_history_user_relation
                 ON family_history(user, relation, condition_name);
 
+            -- Discrete genomic/PGx findings stay separate from the generic
+            -- health_records catch-all, matching tumors and reproductive_records.
+            CREATE TABLE IF NOT EXISTS genomic_records (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                user                  TEXT NOT NULL,
+                created_ts            TEXT NOT NULL,
+                record_type           TEXT NOT NULL,   -- variant | pgx | carrier_screen | polygenic_risk | wgs_summary | other
+                test_date             TEXT,
+                report_date           TEXT,
+                lab_name              TEXT,
+                ordering_provider     TEXT,
+                methodology           TEXT,            -- targeted_panel | WES | WGS | array | other
+                gene                  TEXT,
+                transcript            TEXT,
+                hgvs_c                TEXT,
+                hgvs_p                TEXT,
+                rsid                  TEXT,
+                zygosity              TEXT,            -- heterozygous | homozygous | hemizygous
+                clinical_significance TEXT,            -- pathogenic | likely_pathogenic | vus | likely_benign | benign
+                inheritance_pattern   TEXT,
+                associated_condition  TEXT,
+                pgx_phenotype         TEXT,            -- e.g. poor/intermediate/normal/rapid/ultrarapid metabolizer
+                pgx_drug              TEXT,
+                pgx_guideline_source  TEXT,            -- e.g. CPIC, FDA label
+                polygenic_trait       TEXT,
+                polygenic_score       REAL,
+                polygenic_percentile  REAL,
+                document_id           INTEGER,         -- FK-by-convention to documents.id (source report)
+                source                TEXT,
+                notes                 TEXT,
+                extra_json            TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_genomic_records_user_type_date
+                ON genomic_records(user, record_type, test_date);
+
             CREATE TABLE IF NOT EXISTS health_records (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 user        TEXT NOT NULL,

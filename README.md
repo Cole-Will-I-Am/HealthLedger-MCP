@@ -11,7 +11,7 @@ and reason over that record on demand.
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-75-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-77-0EA5E9)](#-tool-catalog)
 [![Local-first](https://img.shields.io/badge/runs-local--first-16A34A)](#-quick-start)
 [![Model-agnostic](https://img.shields.io/badge/works%20with-any%20LLM-8B5CF6)](#-use-it-with-any-client--any-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
@@ -110,11 +110,12 @@ the other side can be Claude, a local Llama, GPT-something, whatever your client
 ## 🗄️ Storage
 
 - **SQLite** at `~/.healthledger/health.db` — mode `0600`, WAL journaling. Override with `HEALTH_MCP_DB`.
-- **Schema v3** covers quantitative metrics, events, notes, profile facts, conditions,
+- **Schema v4** covers quantitative metrics, events, notes, profile facts, conditions,
   allergies, medications & dose logs, lab reports/results, biomarkers, tumor/cancer
   records, encounters/physicals, procedures, imaging, immunizations, care tasks,
-  documents, enriched family history, reproductive-health records, substance-use logs,
-  wearable/app sources, wearable samples, and a generic `health_records` catch-all.
+  documents, enriched family history, genomic/PGx records, reproductive-health
+  records, substance-use logs, wearable/app sources, wearable samples, and a
+  generic `health_records` catch-all.
 - **`~/.healthledger/audit.log`** records every tool call (override with `HEALTH_MCP_AUDIT_LOG`).
 - It's just a SQLite file — back it up, sync it, or delete it like any other file.
 
@@ -130,7 +131,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**75 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**77 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -166,6 +167,12 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 `add_substance_use_log` · `list_substance_use_logs` · `analyze_substance_trend` ·
 `add_wearable_source` · `list_wearable_sources` · `add_wearable_sample` ·
 `import_wearable_samples` · `list_wearable_samples` · `analyze_wearable_trend`
+</details>
+
+<details>
+<summary><b>🧬 Genomics &amp; pharmacogenomics</b></summary>
+
+`add_genomic_record` · `list_genomic_records`
 </details>
 
 <details>

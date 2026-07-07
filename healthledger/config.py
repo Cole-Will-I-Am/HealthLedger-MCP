@@ -65,7 +65,7 @@ RATE_LIMIT_ENABLED = os.environ.get("HEALTH_MCP_RATE_LIMIT_ENABLED", "1").strip(
 }
 RATE_LIMIT_CALLS = _int_env("HEALTH_MCP_RATE_LIMIT_CALLS", 240, min_value=1, max_value=100000)
 RATE_LIMIT_WINDOW_SECONDS = _int_env("HEALTH_MCP_RATE_LIMIT_WINDOW_SECONDS", 60, min_value=1, max_value=3600)
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SAFE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,79}$")
@@ -89,6 +89,7 @@ DATA_TABLES = (
     "care_tasks",
     "documents",
     "family_history",
+    "genomic_records",
     "health_records",
     "reproductive_records",
     "substance_use_logs",
@@ -115,6 +116,7 @@ EXPORT_SELECT_SQL = {
     "care_tasks": "SELECT id, task_type, title, due_date, status, priority, related_table, related_id, recurrence, completed_ts, notes FROM care_tasks WHERE user=? ORDER BY COALESCE(due_date, created_ts) ASC, id ASC LIMIT ? OFFSET ?",
     "documents": "SELECT id, document_date, document_type, title, source, provider, facility, tags, summary, content_text, source_uri FROM documents WHERE user=? ORDER BY COALESCE(document_date, created_ts) ASC, id ASC LIMIT ? OFFSET ?",
     "family_history": "SELECT id, relation, condition_name, status, age_at_onset, relative_status, age_at_death, cause_of_death, notes FROM family_history WHERE user=? ORDER BY relation ASC, condition_name ASC, id ASC LIMIT ? OFFSET ?",
+    "genomic_records": "SELECT id, record_type, test_date, report_date, lab_name, ordering_provider, methodology, gene, transcript, hgvs_c, hgvs_p, rsid, zygosity, clinical_significance, inheritance_pattern, associated_condition, pgx_phenotype, pgx_drug, pgx_guideline_source, polygenic_trait, polygenic_score, polygenic_percentile, document_id, source, notes, extra_json FROM genomic_records WHERE user=? ORDER BY COALESCE(test_date, created_ts) ASC, id ASC LIMIT ? OFFSET ?",
     "health_records": "SELECT id, record_date, record_type, title, body, source, tags, extra_json FROM health_records WHERE user=? ORDER BY COALESCE(record_date, created_ts) ASC, id ASC LIMIT ? OFFSET ?",
     "reproductive_records": "SELECT id, record_type, start_date, end_date, flow_intensity, pain_level, cervical_mucus, ovulation_predicted_date, gestational_age_weeks, due_date, outcome, method, insertion_date, removal_date, replacement_due_date, source, notes, extra_json FROM reproductive_records WHERE user=? ORDER BY COALESCE(start_date, due_date, replacement_due_date, created_ts) ASC, id ASC LIMIT ? OFFSET ?",
     "substance_use_logs": "SELECT id, timestamp, substance, amount, unit, frequency, route, context, notes FROM substance_use_logs WHERE user=? ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?",

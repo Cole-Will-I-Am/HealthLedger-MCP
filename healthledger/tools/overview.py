@@ -128,6 +128,13 @@ def summarize_health(
             "WHERE user=? ORDER BY relation ASC, condition_name ASC LIMIT 50",
             (u,),
         ))
+        recent_genomic_records = _rows(conn.execute(
+            "SELECT id, record_type, test_date, report_date, gene, rsid, clinical_significance, "
+            "pgx_phenotype, pgx_drug, polygenic_trait FROM genomic_records "
+            "WHERE user=? AND substr(COALESCE(test_date, report_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(test_date, report_date, created_ts) DESC, id DESC LIMIT 20",
+            (u, lo_date, hi_date),
+        ))
         recent_health_records = _rows(conn.execute(
             "SELECT id, record_date, record_type, title, source, tags FROM health_records "
             "WHERE user=? AND substr(COALESCE(record_date, created_ts), 1, 10) BETWEEN ? AND ? "
@@ -181,6 +188,7 @@ def summarize_health(
         "immunizations_due": immunizations_due,
         "recent_documents": recent_documents,
         "family_history": family_history,
+        "recent_genomic_records": recent_genomic_records,
         "recent_health_records": recent_health_records,
         "recent_reproductive_records": recent_reproductive_records,
         "recent_substance_use": recent_substance_use,
@@ -395,6 +403,16 @@ def search_records(query: str, user: str | None = None, limit: int = 50) -> dict
             "(tumor_name LIKE ? ESCAPE '\\' OR cancer_type LIKE ? ESCAPE '\\' OR body_site LIKE ? ESCAPE '\\' "
             "OR biomarker_summary LIKE ? ESCAPE '\\') ORDER BY COALESCE(diagnosis_date, created_ts) DESC LIMIT ?",
             (u, q, q, q, q, lim)))
+        genomic_records = _rows(conn.execute(
+            "SELECT id, record_type, test_date, report_date, gene, rsid, clinical_significance, "
+            "pgx_phenotype, pgx_drug, polygenic_trait FROM genomic_records WHERE user=? AND "
+            "(record_type LIKE ? ESCAPE '\\' OR gene LIKE ? ESCAPE '\\' OR hgvs_c LIKE ? ESCAPE '\\' "
+            "OR hgvs_p LIKE ? ESCAPE '\\' OR rsid LIKE ? ESCAPE '\\' OR clinical_significance LIKE ? ESCAPE '\\' "
+            "OR associated_condition LIKE ? ESCAPE '\\' OR pgx_phenotype LIKE ? ESCAPE '\\' "
+            "OR pgx_drug LIKE ? ESCAPE '\\' OR pgx_guideline_source LIKE ? ESCAPE '\\' "
+            "OR polygenic_trait LIKE ? ESCAPE '\\' OR source LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' "
+            "OR extra_json LIKE ? ESCAPE '\\') ORDER BY COALESCE(test_date, report_date, created_ts) DESC LIMIT ?",
+            (u, q, q, q, q, q, q, q, q, q, q, q, q, q, q, lim)))
         encounters = _rows(conn.execute(
             "SELECT id, encounter_date, encounter_type, provider, facility, reason FROM encounters WHERE user=? AND "
             "(encounter_type LIKE ? ESCAPE '\\' OR provider LIKE ? ESCAPE '\\' OR facility LIKE ? ESCAPE '\\' "
@@ -475,6 +493,7 @@ def search_records(query: str, user: str | None = None, limit: int = 50) -> dict
         "lab_results": labs,
         "biomarkers": biomarkers,
         "tumors": tumors,
+        "genomic_records": genomic_records,
         "encounters": encounters,
         "procedures": procedures,
         "imaging_reports": imaging_reports,

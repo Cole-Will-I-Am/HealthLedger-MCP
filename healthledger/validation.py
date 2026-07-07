@@ -7,6 +7,14 @@ from healthledger.audit import _audit, _fingerprint
 from mcp.server.auth.middleware.auth_context import get_access_token
 
 
+GENOMIC_RECORD_TYPES = {
+    "variant", "pgx", "carrier_screen", "polygenic_risk", "wgs_summary", "other",
+}
+CLINICAL_SIGNIFICANCE = {
+    "pathogenic", "likely_pathogenic", "vus", "likely_benign", "benign",
+}
+
+
 def _required_text(value: str | None, field: str, *, max_chars: int = MAX_TEXT_CHARS) -> str:
     if value is None:
         raise ValueError(f"{field} is required")

@@ -6,6 +6,7 @@ is what wires the whole tool catalog onto the server.
 from healthledger.tools import (  # noqa: F401
     core,
     clinical,
+    genomics,
     labs,
     life,
     crosssignal,

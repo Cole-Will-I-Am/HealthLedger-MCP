@@ -29,6 +29,14 @@ _SEARCH_CORPUS = {
     "documents": (["title", "summary", "content_text", "tags"], "document_date"),
     "family_history": (["relation", "condition_name", "cause_of_death", "notes"], None),
     "care_tasks": (["title", "task_type", "notes"], "due_date"),
+    "genomic_records": (
+        [
+            "record_type", "gene", "hgvs_c", "hgvs_p", "rsid", "clinical_significance",
+            "associated_condition", "pgx_phenotype", "pgx_drug", "pgx_guideline_source",
+            "polygenic_trait", "source", "notes", "extra_json",
+        ],
+        "COALESCE(test_date, report_date, created_ts)",
+    ),
     "health_records": (["title", "body", "tags", "extra_json"], "record_date"),
     "reproductive_records": (["record_type", "method", "outcome", "source", "notes"], "start_date"),
     "substance_use_logs": (["substance", "context", "notes"], "timestamp"),
@@ -169,6 +177,7 @@ _COVERAGE_DATE_EXPR = {
     "documents": "COALESCE(document_date, created_ts)",
     "care_tasks": "COALESCE(due_date, created_ts)",
     "reproductive_records": "COALESCE(start_date, created_ts)",
+    "genomic_records": "COALESCE(test_date, report_date, created_ts)",
     "family_history": "created_ts",
     "lab_reports": "COALESCE(collection_date, report_date, created_ts)",
     "health_records": "COALESCE(record_date, created_ts)",
