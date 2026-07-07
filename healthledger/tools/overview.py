@@ -3,7 +3,7 @@ delete, export, and status."""
 from healthledger.runtime import *  # noqa: F401,F403
 
 
-@mcp.tool(annotations={"title": "Summarize health record", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Summarize health record", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def summarize_health(
     since: str | None = None,
     until: str | None = None,
@@ -198,7 +198,10 @@ def summarize_health(
         "domain_counts": domain_counts,
         "recent_events": recent_events,
         "recent_notes": recent_notes,
-        "disclaimer": "Descriptive data only; not medical advice. Consult a professional for clinical decisions.",
+        "disclaimer": _assert_descriptive(
+            "Descriptive data only; not medical advice. Consult a professional for clinical decisions.",
+            "summarize_health.disclaimer",
+        ),
     }
 
 
@@ -269,7 +272,7 @@ def health_agenda(days: int = 30, user: str | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations={"title": "Care gap report", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Care gap report", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def care_gap_report(user: str | None = None) -> dict:
     """Report missing/stale data and unresolved stored follow-ups. This is organizational, not clinical guidance."""
     u = _tool_user(user, "care_gap_report")
@@ -319,7 +322,11 @@ def care_gap_report(user: str | None = None) -> dict:
         ).fetchone()["latest"]
     for table in ("conditions", "medications", "allergies", "lab_results", "encounters", "immunizations"):
         if counts.get(table, 0) == 0:
-            gaps.append({"kind": "missing_domain", "table": table, "message": f"no stored {table}"})
+            gaps.append({
+                "kind": "missing_domain",
+                "table": table,
+                "message": _assert_descriptive(f"no stored {table}", "care_gap_report.gaps.message"),
+            })
     for med in active_meds_missing_schedule:
         gaps.append({"kind": "medication_missing_schedule", "medication_id": med["id"], "name": med["name"]})
     for task in open_tasks_without_due:
@@ -327,7 +334,10 @@ def care_gap_report(user: str | None = None) -> dict:
     if latest_physical is None:
         gaps.append({
             "kind": "missing_physical_record",
-            "message": "no stored annual/wellness/physical encounter",
+            "message": _assert_descriptive(
+                "no stored annual/wellness/physical encounter",
+                "care_gap_report.gaps.message",
+            ),
         })
     return {
         "user": u,
@@ -340,7 +350,10 @@ def care_gap_report(user: str | None = None) -> dict:
         "latest_wearable_sample_ts": latest_wearable_sample,
         "overdue_followups": due_followups,
         "gaps": gaps,
-        "disclaimer": "Care gaps are based only on stored data completeness/dates; this is not clinical screening advice.",
+        "disclaimer": _assert_descriptive(
+            "Care gaps are based only on stored data completeness/dates; this is not clinical screening advice.",
+            "care_gap_report.disclaimer",
+        ),
     }
 
 

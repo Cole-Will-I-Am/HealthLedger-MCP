@@ -11,7 +11,7 @@ and reason over that record on demand.
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-77-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-78-0EA5E9)](#-tool-catalog)
 [![Local-first](https://img.shields.io/badge/runs-local--first-16A34A)](#-quick-start)
 [![Model-agnostic](https://img.shields.io/badge/works%20with-any%20LLM-8B5CF6)](#-use-it-with-any-client--any-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
@@ -131,7 +131,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**77 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**78 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -186,6 +186,15 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 <summary><b>🔎 Retrieval &amp; grounding</b></summary>
 
 `semantic_search` · `get_record` · `data_coverage`
+</details>
+
+<details>
+<summary><b>🎓 Skills &amp; output contracts</b></summary>
+
+`get_reasoning_guide` returns the packaged reasoning guide; clients with MCP
+resource support can also read `healthledger://skill/reasoning`. Analysis tools
+guarantee top-level `value`, `reference_range`, `recency`, and `source_ids`
+keys, and analysis/summary/care-gap tools advertise `statementType: descriptive`.
 </details>
 
 <details>

@@ -7,6 +7,7 @@ from healthledger.tools import (  # noqa: F401
     core,
     clinical,
     genomics,
+    guidance,
     labs,
     life,
     crosssignal,

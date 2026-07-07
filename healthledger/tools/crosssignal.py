@@ -2,7 +2,7 @@
 from healthledger.runtime import *  # noqa: F401,F403
 
 
-@mcp.tool(annotations={"title": "Correlate two signals", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Correlate two signals", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def correlate_metrics(
     source_a: str,
     name_a: str,
@@ -66,6 +66,8 @@ def correlate_metrics(
     paired = [(k, grid_a[k], grid_b[_shift(k)]) for k in sorted(grid_a) if _shift(k) in grid_b]
     xs = [p[1] for p in paired]
     ys = [p[2] for p in paired]
+    combined_ids = [it["id"] for it in items_a + items_b if it.get("id") is not None]
+    latest_ts = max([it["ts"] for it in items_a + items_b], default=None)
     result = {
         "user": u,
         "series_a": {"source": skey_a, "name": clean_a,
@@ -87,7 +89,12 @@ def correlate_metrics(
         result["message"] = "need at least 3 shared buckets to correlate"
         caveats.append("Too few overlapping points for a meaningful correlation.")
         result["caveats"] = caveats
-        return result
+        return _envelope(
+            value=[{"bucket": k, "a": a, "b": b} for k, a, b in paired],
+            days_stale=_days_since(latest_ts) if latest_ts else None,
+            source_ids=combined_ids,
+            **result,
+        )
     if len(paired) < 10:
         caveats.append(f"Only {len(paired)} paired points; the estimate is unstable and "
                        "p-values are rough.")
@@ -115,10 +122,15 @@ def correlate_metrics(
                 "direction": "positive" if rho > 0 else ("negative" if rho < 0 else "none"),
             }
     result["caveats"] = caveats
-    return result
+    return _envelope(
+        value=[{"bucket": k, "a": a, "b": b} for k, a, b in paired],
+        days_stale=_days_since(latest_ts) if latest_ts else None,
+        source_ids=combined_ids,
+        **result,
+    )
 
 
-@mcp.tool(annotations={"title": "Analyze event impact", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze event impact", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_event_impact(
     name: str,
     event_date: str,
@@ -167,16 +179,16 @@ def analyze_event_impact(
         if wash and abs((it_dt - anchor_dt).total_seconds()) / 86400.0 < wash:
             continue
         (before if it_dt < anchor_dt else after).append(it)
+    latest = max(items, key=lambda it: it["ts"]) if items else None
+    source_ids = {"before": [it["id"] for it in before if it.get("id") is not None],
+                  "after": [it["id"] for it in after if it.get("id") is not None]}
     out = {
         "user": u,
         "source": skey,
         "name": clean,
         "event": {"date": anchor, "label": event_label},
-        "unit": items[-1]["unit"] if items else None,
         "window_days": wd,
         "washout_days": wash,
-        "source_ids": {"before": [it["id"] for it in before if it.get("id") is not None],
-                       "after": [it["id"] for it in after if it.get("id") is not None]},
         "before": _group_stats(before),
         "after": _group_stats(after),
         "disclaimer": "Descriptive before/after comparison; not proof of causation or medical advice.",
@@ -196,7 +208,15 @@ def analyze_event_impact(
             out["change"]["welch_t_test"] = welch
     else:
         out["message"] = "need readings on both sides of the event to compare"
-    return out
+    return _envelope(
+        value=(out.get("change") or {}).get("absolute_change"),
+        unit=latest["unit"] if latest else None,
+        ref_low=latest.get("ref_low") if latest else None,
+        ref_high=latest.get("ref_high") if latest else None,
+        days_stale=_days_since(latest["ts"]) if latest else None,
+        source_ids=source_ids,
+        **out,
+    )
 
 
 @mcp.tool(annotations={"title": "Align multiple signals", "readOnlyHint": True, "idempotentHint": True})

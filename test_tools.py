@@ -5,6 +5,7 @@ Run: ./.venv/bin/python test_tools.py
 """
 import os
 import json
+import asyncio
 import tempfile
 
 failures = []
@@ -25,6 +26,65 @@ with tempfile.TemporaryDirectory() as tmp:
     import server  # noqa: E402
 
     server._init_db()
+
+    guide = server.get_reasoning_guide()
+    check("reasoning guide exposed",
+          guide["version"] == "v1" and "data_coverage" in guide["guide"]
+          and "clinician" in guide["guide"], str(guide))
+    if hasattr(server.mcp, "list_resources"):
+        resources = asyncio.run(server.mcp.list_resources())
+        check("reasoning resource registered",
+              any(str(getattr(r, "uri", "")) == "healthledger://skill/reasoning" for r in resources),
+              str(resources))
+
+    from healthledger.guardrails import _assert_descriptive  # noqa: E402
+    try:
+        _assert_descriptive("I recommend you start taking this medication", "test.generated")
+    except ValueError:
+        check("guardrail rejects clinical instruction", True)
+    else:
+        check("guardrail rejects clinical instruction", False)
+
+    analysis_tool_names = sorted(
+        name for name in dir(server)
+        if (name.startswith("analyze_") or name == "correlate_metrics")
+        and callable(getattr(server, name))
+    )
+    contract_user = "contract-empty"
+    analysis_contract_calls = {
+        "analyze_biomarker_trend": lambda: server.analyze_biomarker_trend("missing_biomarker", user=contract_user),
+        "analyze_event_impact": lambda: server.analyze_event_impact("missing_metric", "2026-01-01", source="metric", user=contract_user),
+        "analyze_lab_trend": lambda: server.analyze_lab_trend("missing_lab", user=contract_user),
+        "analyze_metric": lambda: server.analyze_metric("missing_metric", user=contract_user),
+        "analyze_reproductive_trend": lambda: server.analyze_reproductive_trend(user=contract_user),
+        "analyze_substance_trend": lambda: server.analyze_substance_trend("missing_substance", user=contract_user),
+        "analyze_trend": lambda: server.analyze_trend("missing_metric", source="metric", user=contract_user),
+        "analyze_wearable_trend": lambda: server.analyze_wearable_trend("missing_sample", user=contract_user),
+        "correlate_metrics": lambda: server.correlate_metrics("metric", "missing_a", "metric", "missing_b", user=contract_user),
+    }
+    missing_contract_calls = [name for name in analysis_tool_names if name not in analysis_contract_calls]
+    check("analysis contract test covers registered analysis tools", not missing_contract_calls,
+          str(missing_contract_calls))
+    registered_tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+    descriptive_tools = analysis_tool_names + ["summarize_health", "care_gap_report"]
+    missing_statement_type = [
+        name for name in descriptive_tools
+        if getattr(getattr(registered_tools.get(name), "annotations", None), "statementType", None) != "descriptive"
+    ]
+    check("descriptive tools carry statementType annotation", not missing_statement_type,
+          str(missing_statement_type))
+    for name in analysis_tool_names:
+        if name not in analysis_contract_calls:
+            continue
+        response = analysis_contract_calls[name]()
+        has_contract = (
+            ("value" in response or "values" in response)
+            and "reference_range" in response
+            and isinstance(response.get("recency"), dict)
+            and "days_stale" in response["recency"]
+            and "source_ids" in response
+        )
+        check(f"{name} returns analysis envelope", has_contract, str(response))
 
     first = server.log_metric(" Weight Kg ", 180, "lb", timestamp="2026-07-06T08:00:00Z", user="  ")
     second = server.log_metric("weight kg", 181, "lb", timestamp="2026-07-06T20:00:00Z")

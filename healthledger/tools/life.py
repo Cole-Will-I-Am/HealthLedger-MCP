@@ -90,7 +90,7 @@ def list_reproductive_records(
     return {"user": u, "count": len(rows), "reproductive_records": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze reproductive trend", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze reproductive trend", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_reproductive_trend(user: str | None = None, limit: int = 24) -> dict:
     """Return descriptive cycle length/duration stats from stored cycle records only."""
     u = _tool_user(user, "analyze_reproductive_trend")
@@ -98,7 +98,7 @@ def analyze_reproductive_trend(user: str | None = None, limit: int = 24) -> dict
     _audit("analyze_reproductive_trend", f"{_audit_user(u)} limit={lim}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT start_date, end_date, flow_intensity, pain_level FROM reproductive_records "
+            "SELECT id, start_date, end_date, flow_intensity, pain_level FROM reproductive_records "
             "WHERE user=? AND record_type='cycle' AND start_date IS NOT NULL "
             "ORDER BY start_date DESC LIMIT ?",
             (u, lim),
@@ -123,26 +123,33 @@ def analyze_reproductive_trend(user: str | None = None, limit: int = 24) -> dict
             end = datetime.strptime(r["end_date"], "%Y-%m-%d").date()
             if end >= start:
                 period_lengths.append(float((end - start).days + 1))
-    return {
-        "user": u,
-        "cycle_records": len(rows),
-        "cycle_length_days": {
-            "count": len(cycle_lengths),
-            "min": min(cycle_lengths) if cycle_lengths else None,
-            "max": max(cycle_lengths) if cycle_lengths else None,
-            "mean": round(statistics.fmean(cycle_lengths), 2) if cycle_lengths else None,
-            "median": round(statistics.median(cycle_lengths), 2) if cycle_lengths else None,
-        },
-        "period_length_days": {
-            "count": len(period_lengths),
-            "min": min(period_lengths) if period_lengths else None,
-            "max": max(period_lengths) if period_lengths else None,
-            "mean": round(statistics.fmean(period_lengths), 2) if period_lengths else None,
-            "median": round(statistics.median(period_lengths), 2) if period_lengths else None,
-        },
-        "upcoming_reproductive_dates": upcoming,
-        "disclaimer": "Descriptive reproductive tracking only; not fertility, contraception, or medical advice.",
+    cycle_length_days = {
+        "count": len(cycle_lengths),
+        "min": min(cycle_lengths) if cycle_lengths else None,
+        "max": max(cycle_lengths) if cycle_lengths else None,
+        "mean": round(statistics.fmean(cycle_lengths), 2) if cycle_lengths else None,
+        "median": round(statistics.median(cycle_lengths), 2) if cycle_lengths else None,
     }
+    period_length_days = {
+        "count": len(period_lengths),
+        "min": min(period_lengths) if period_lengths else None,
+        "max": max(period_lengths) if period_lengths else None,
+        "mean": round(statistics.fmean(period_lengths), 2) if period_lengths else None,
+        "median": round(statistics.median(period_lengths), 2) if period_lengths else None,
+    }
+    latest_date = rows[0]["start_date"] if rows else None
+    return _envelope(
+        value=cycle_length_days["mean"],
+        unit="days",
+        days_stale=_days_since(latest_date) if latest_date else None,
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        cycle_records=len(rows),
+        cycle_length_days=cycle_length_days,
+        period_length_days=period_length_days,
+        upcoming_reproductive_dates=upcoming,
+        disclaimer="Descriptive reproductive tracking only; not fertility, contraception, or medical advice.",
+    )
 
 
 @mcp.tool(annotations={"title": "Add substance use log", "readOnlyHint": False, "idempotentHint": False})
@@ -208,7 +215,7 @@ def list_substance_use_logs(
     return {"user": u, "count": len(rows), "substance_use_logs": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze substance trend", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze substance trend", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_substance_trend(
     substance: str,
     since: str | None = None,
@@ -228,28 +235,32 @@ def analyze_substance_trend(
             (u, clean_substance, lo, hi),
         ))
     if not rows:
-        return {"user": u, "substance": clean_substance, "count": 0}
+        return _envelope(value=None, user=u, substance=clean_substance, count=0)
     daily: dict[str, float] = {}
     for r in rows:
         day = r["timestamp"].split("T", 1)[0]
         daily[day] = daily.get(day, 0.0) + float(r["amount"])
     points = [(f"{day}T00:00:00+00:00", value) for day, value in sorted(daily.items())]
     values = list(daily.values())
-    return {
-        "user": u,
-        "substance": clean_substance,
-        "count": len(rows),
-        "logged_days": len(daily),
-        "unit": rows[-1]["unit"],
-        "source_ids": [r["id"] for r in rows],
-        "latest_days_stale": _days_since(rows[-1]["timestamp"]),
-        "total_amount": round(sum(values), 4),
-        "mean_per_logged_day": round(statistics.fmean(values), 4),
-        "median_per_logged_day": round(statistics.median(values), 4),
-        "daily_totals": [{"date": day, "total": total} for day, total in sorted(daily.items())][-30:],
-        "trend": _linreg_per_day(points) if len(points) >= 2 else None,
-        "disclaimer": "Descriptive substance-use tracking only; not treatment or medical advice.",
-    }
+    latest_days_stale = _days_since(rows[-1]["timestamp"])
+    total_amount = round(sum(values), 4)
+    return _envelope(
+        value=total_amount,
+        unit=rows[-1]["unit"],
+        days_stale=latest_days_stale,
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        substance=clean_substance,
+        count=len(rows),
+        logged_days=len(daily),
+        latest_days_stale=latest_days_stale,
+        total_amount=total_amount,
+        mean_per_logged_day=round(statistics.fmean(values), 4),
+        median_per_logged_day=round(statistics.median(values), 4),
+        daily_totals=[{"date": day, "total": total} for day, total in sorted(daily.items())][-30:],
+        trend=_linreg_per_day(points) if len(points) >= 2 else None,
+        disclaimer="Descriptive substance-use tracking only; not treatment or medical advice.",
+    )
 
 
 @mcp.tool(annotations={"title": "Add wearable source", "readOnlyHint": False, "idempotentHint": False})
@@ -437,7 +448,7 @@ def list_wearable_samples(
     return {"user": u, "count": len(rows), "wearable_samples": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze wearable trend", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze wearable trend", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_wearable_trend(
     sample_type: str,
     since: str | None = None,
@@ -462,21 +473,25 @@ def analyze_wearable_trend(
     with _db() as conn:
         rows = _rows(conn.execute(sql, args))
     if not rows:
-        return {"user": u, "sample_type": clean_type, "count": 0}
+        return _envelope(value=None, user=u, sample_type=clean_type, count=0)
     values = [float(r["value"]) for r in rows]
     points = [(r["start_ts"], float(r["value"])) for r in rows]
-    return {
-        "user": u,
-        "sample_type": clean_type,
-        "count": len(rows),
-        "unit": rows[-1]["unit"],
-        "source_ids": [r["id"] for r in rows],
-        "latest": rows[-1],
-        "latest_days_stale": _days_since(rows[-1]["start_ts"]),
-        "min": min(values),
-        "max": max(values),
-        "mean": round(statistics.fmean(values), 4),
-        "median": round(statistics.median(values), 4),
-        "trend": _linreg_per_day(points) if len(points) >= 2 else None,
-        "disclaimer": "Descriptive wearable-data trend only; not diagnosis or medical advice.",
-    }
+    latest = rows[-1]
+    latest_days_stale = _days_since(latest["start_ts"])
+    return _envelope(
+        value=float(latest["value"]),
+        unit=latest["unit"],
+        days_stale=latest_days_stale,
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        sample_type=clean_type,
+        count=len(rows),
+        latest=latest,
+        latest_days_stale=latest_days_stale,
+        min=min(values),
+        max=max(values),
+        mean=round(statistics.fmean(values), 4),
+        median=round(statistics.median(values), 4),
+        trend=_linreg_per_day(points) if len(points) >= 2 else None,
+        disclaimer="Descriptive wearable-data trend only; not diagnosis or medical advice.",
+    )

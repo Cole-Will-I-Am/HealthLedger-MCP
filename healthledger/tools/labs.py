@@ -145,7 +145,7 @@ def list_lab_results(
     return {"user": u, "count": len(rows), "lab_results": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze lab trend", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze lab trend", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_lab_trend(analyte: str, since: str | None = None, until: str | None = None, user: str | None = None) -> dict:
     """Return descriptive trend stats for numeric lab results for one analyte."""
     u = _tool_user(user, "analyze_lab_trend")
@@ -154,31 +154,38 @@ def analyze_lab_trend(analyte: str, since: str | None = None, until: str | None 
     _audit("analyze_lab_trend", f"{_audit_user(u)} analyte_hash={_fingerprint(clean_analyte)}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT id, result_date, created_ts, numeric_value, unit, ref_low, ref_high, flag FROM lab_results "
+            "SELECT id, result_date, created_ts, numeric_value, unit, ref_low, ref_high, ref_text, flag FROM lab_results "
             "WHERE user=? AND analyte=? AND numeric_value IS NOT NULL "
             "AND substr(COALESCE(result_date, created_ts), 1, 10) BETWEEN ? AND ? "
             "ORDER BY COALESCE(result_date, created_ts) ASC",
             (u, clean_analyte, lo.split("T", 1)[0], hi.split("T", 1)[0]),
         ))
     if not rows:
-        return {"user": u, "analyte": clean_analyte, "count": 0}
+        return _envelope(value=None, user=u, analyte=clean_analyte, count=0)
     values = [r["numeric_value"] for r in rows]
     points = [(r["result_date"] + "T00:00:00+00:00", r["numeric_value"]) for r in rows if r["result_date"]]
-    return {
-        "user": u,
-        "analyte": clean_analyte,
-        "count": len(rows),
-        "unit": rows[-1]["unit"],
-        "source_ids": [r["id"] for r in rows],
-        "latest": rows[-1],
-        "latest_days_stale": _days_since(rows[-1]["result_date"] or rows[-1]["created_ts"]),
-        "min": min(values),
-        "max": max(values),
-        "mean": round(statistics.fmean(values), 4),
-        "median": round(statistics.median(values), 4),
-        "trend": _linreg_per_day(points) if len(points) >= 2 else None,
-        "disclaimer": "Descriptive lab trend only; not diagnosis or medical advice.",
-    }
+    latest = rows[-1]
+    latest_days_stale = _days_since(latest["result_date"] or latest["created_ts"])
+    return _envelope(
+        value=latest["numeric_value"],
+        unit=latest["unit"],
+        ref_low=latest["ref_low"],
+        ref_high=latest["ref_high"],
+        ref_text=latest["ref_text"],
+        days_stale=latest_days_stale,
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        analyte=clean_analyte,
+        count=len(rows),
+        latest=latest,
+        latest_days_stale=latest_days_stale,
+        min=min(values),
+        max=max(values),
+        mean=round(statistics.fmean(values), 4),
+        median=round(statistics.median(values), 4),
+        trend=_linreg_per_day(points) if len(points) >= 2 else None,
+        disclaimer="Descriptive lab trend only; not diagnosis or medical advice.",
+    )
 
 
 @mcp.tool(annotations={"title": "Add a biomarker", "readOnlyHint": False, "idempotentHint": False})
@@ -263,7 +270,7 @@ def list_biomarkers(
     return {"user": u, "count": len(rows), "biomarkers": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze biomarker trend", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze biomarker trend", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_biomarker_trend(biomarker: str, since: str | None = None, until: str | None = None, user: str | None = None) -> dict:
     """Return descriptive trend stats for numeric biomarker observations."""
     u = _tool_user(user, "analyze_biomarker_trend")
@@ -272,31 +279,38 @@ def analyze_biomarker_trend(biomarker: str, since: str | None = None, until: str
     _audit("analyze_biomarker_trend", f"{_audit_user(u)} biomarker_hash={_fingerprint(clean_marker)}")
     with _db() as conn:
         rows = _rows(conn.execute(
-            "SELECT id, measured_date, created_ts, numeric_value, unit, ref_low, ref_high, flag FROM biomarkers "
+            "SELECT id, measured_date, created_ts, numeric_value, unit, ref_low, ref_high, ref_text, flag FROM biomarkers "
             "WHERE user=? AND biomarker=? AND numeric_value IS NOT NULL "
             "AND substr(COALESCE(measured_date, created_ts), 1, 10) BETWEEN ? AND ? "
             "ORDER BY COALESCE(measured_date, created_ts) ASC",
             (u, clean_marker, lo.split("T", 1)[0], hi.split("T", 1)[0]),
         ))
     if not rows:
-        return {"user": u, "biomarker": clean_marker, "count": 0}
+        return _envelope(value=None, user=u, biomarker=clean_marker, count=0)
     values = [r["numeric_value"] for r in rows]
     points = [(r["measured_date"] + "T00:00:00+00:00", r["numeric_value"]) for r in rows if r["measured_date"]]
-    return {
-        "user": u,
-        "biomarker": clean_marker,
-        "count": len(rows),
-        "unit": rows[-1]["unit"],
-        "source_ids": [r["id"] for r in rows],
-        "latest": rows[-1],
-        "latest_days_stale": _days_since(rows[-1]["measured_date"] or rows[-1]["created_ts"]),
-        "min": min(values),
-        "max": max(values),
-        "mean": round(statistics.fmean(values), 4),
-        "median": round(statistics.median(values), 4),
-        "trend": _linreg_per_day(points) if len(points) >= 2 else None,
-        "disclaimer": "Descriptive biomarker trend only; not diagnosis or medical advice.",
-    }
+    latest = rows[-1]
+    latest_days_stale = _days_since(latest["measured_date"] or latest["created_ts"])
+    return _envelope(
+        value=latest["numeric_value"],
+        unit=latest["unit"],
+        ref_low=latest["ref_low"],
+        ref_high=latest["ref_high"],
+        ref_text=latest["ref_text"],
+        days_stale=latest_days_stale,
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        biomarker=clean_marker,
+        count=len(rows),
+        latest=latest,
+        latest_days_stale=latest_days_stale,
+        min=min(values),
+        max=max(values),
+        mean=round(statistics.fmean(values), 4),
+        median=round(statistics.median(values), 4),
+        trend=_linreg_per_day(points) if len(points) >= 2 else None,
+        disclaimer="Descriptive biomarker trend only; not diagnosis or medical advice.",
+    )
 
 
 @mcp.tool(annotations={"title": "Add a tumor record", "readOnlyHint": False, "idempotentHint": False})

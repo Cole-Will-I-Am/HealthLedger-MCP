@@ -273,7 +273,7 @@ def list_metrics(user: str | None = None) -> dict:
     return {"user": u, "metrics": rows}
 
 
-@mcp.tool(annotations={"title": "Analyze a metric", "readOnlyHint": True, "idempotentHint": True})
+@mcp.tool(annotations={"title": "Analyze a metric", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
 def analyze_metric(
     metric: str,
     since: str | None = None,
@@ -300,8 +300,13 @@ def analyze_metric(
             "SELECT id, ts, value, unit FROM metrics WHERE user=? AND metric=? "
             "AND ts BETWEEN ? AND ? ORDER BY ts ASC", (u, m, lo, hi)))
     if not rows:
-        return {"user": u, "metric": m, "count": 0,
-                "message": f"no '{m}' readings for user '{u}' in this window."}
+        return _envelope(
+            value=None,
+            user=u,
+            metric=m,
+            count=0,
+            message=f"no '{m}' readings for user '{u}' in this window.",
+        )
     values = [r["value"] for r in rows]
     points = [(r["ts"], r["value"]) for r in rows]
     unit = rows[-1]["unit"]
@@ -320,5 +325,13 @@ def analyze_metric(
         "stdev": round(statistics.pstdev(values), 4) if len(values) > 1 else 0.0,
     }
     stats["trend"] = _linreg_per_day(points)
-    return {"user": u, "metric": m, "window": {"since": lo, "until": hi},
-            "source_ids": [r["id"] for r in rows], "stats": stats}
+    return _envelope(
+        value=values[-1],
+        unit=unit,
+        days_stale=stats["latest_days_stale"],
+        source_ids=[r["id"] for r in rows],
+        user=u,
+        metric=m,
+        window={"since": lo, "until": hi},
+        stats=stats,
+    )
