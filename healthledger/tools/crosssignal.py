@@ -66,18 +66,18 @@ def correlate_metrics(
     paired = [(k, grid_a[k], grid_b[_shift(k)]) for k in sorted(grid_a) if _shift(k) in grid_b]
     xs = [p[1] for p in paired]
     ys = [p[2] for p in paired]
-    combined_ids = [it["id"] for it in items_a + items_b if it.get("id") is not None]
+    combined_ids = _source_refs(items_a + items_b)
     latest_ts = max([it["ts"] for it in items_a + items_b], default=None)
     result = {
         "user": u,
         "series_a": {"source": skey_a, "name": clean_a,
                      "unit": items_a[-1]["unit"] if items_a else None,
                      "n_readings": len(items_a), "n_buckets": len(grid_a),
-                     "source_ids": [it["id"] for it in items_a if it.get("id") is not None]},
+                     "source_ids": _source_refs(items_a)},
         "series_b": {"source": skey_b, "name": clean_b,
                      "unit": items_b[-1]["unit"] if items_b else None,
                      "n_readings": len(items_b), "n_buckets": len(grid_b),
-                     "source_ids": [it["id"] for it in items_b if it.get("id") is not None]},
+                     "source_ids": _source_refs(items_b)},
         "resample": resample, "agg": agg, "lag_days": lag,
         "paired_n": len(paired),
         "overlap": ({"first_bucket": paired[0][0], "last_bucket": paired[-1][0]}
@@ -180,8 +180,7 @@ def analyze_event_impact(
             continue
         (before if it_dt < anchor_dt else after).append(it)
     latest = max(items, key=lambda it: it["ts"]) if items else None
-    source_ids = {"before": [it["id"] for it in before if it.get("id") is not None],
-                  "after": [it["id"] for it in after if it.get("id") is not None]}
+    source_ids = {"before": _source_refs(before), "after": _source_refs(after)}
     out = {
         "user": u,
         "source": skey,
@@ -285,7 +284,7 @@ def align_series(
             grid = _resample_series(items, resample, spec_agg)
             grids.append((label, grid))
             meta.append({"label": label, "source": skey, "name": clean,
-                         "source_ids": [it["id"] for it in items if it.get("id") is not None],
+                         "source_ids": _source_refs(items),
                          "unit": items[-1]["unit"] if items else None, "agg": spec_agg,
                          "n_readings": len(items), "n_buckets": len(grid)})
     _audit("align_series", f"{_audit_user(u)} series={len(specs)} resample={resample} join={join}")
@@ -411,7 +410,7 @@ def normalize_series(
         "count": len(rows),
         "converted_count": len(converted_values),
         "unconverted_units": sorted(unconverted),
-        "source_ids": [r["id"] for r in rows if r.get("id") is not None],
+        "source_ids": _source_refs(rows, table=cfg["table"]),
         "rows": rows,
         "disclaimer": "Unit/reference normalization only; not interpretation or diagnosis.",
     }

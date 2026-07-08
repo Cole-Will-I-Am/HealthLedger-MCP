@@ -329,7 +329,7 @@ def analyze_metric(
         value=values[-1],
         unit=unit,
         days_stale=stats["latest_days_stale"],
-        source_ids=[r["id"] for r in rows],
+        source_ids=_source_refs(rows, table="metrics"),
         user=u,
         metric=m,
         window={"since": lo, "until": hi},

@@ -68,9 +68,9 @@ def _resolve_series(conn, user: str, source: str | None, name: str | None,
     """Pull one dated numeric series from any supported source, ascending by time.
 
     Returns (source_key, normalized_name, source_config, items) where each item is
-    {id, ts, value, unit[, ref_low, ref_high][, created_ts][, source]} and
-    non-numeric rows are dropped. The id + created_ts + source give callers what
-    they need to cite the exact row and report its recency/origin."""
+    {id, source_table, ts, value, unit[, ref_low, ref_high][, created_ts][, source]}
+    and non-numeric rows are dropped. The table/id pair plus created_ts + source
+    give callers what they need to cite the exact row and report recency/origin."""
     key, cfg = _series_source(source)
     clean = _keyish(_required_text(name, "name"), "name")
     ts_expr = f"COALESCE({cfg['ts_col']}, created_ts)" if cfg["coalesce_created"] else cfg["ts_col"]
@@ -98,7 +98,13 @@ def _resolve_series(conn, user: str, source: str | None, name: str | None,
         ts = r.get("ts")
         if ts is None:
             continue
-        item = {"id": r.get("id"), "ts": _to_full_ts(ts), "value": float(r["value"]), "unit": r.get("unit")}
+        item = {
+            "id": r.get("id"),
+            "source_table": cfg["table"],
+            "ts": _to_full_ts(ts),
+            "value": float(r["value"]),
+            "unit": r.get("unit"),
+        }
         if cfg["has_ref"]:
             item["ref_low"] = r.get("ref_low")
             item["ref_high"] = r.get("ref_high")
@@ -108,6 +114,17 @@ def _resolve_series(conn, user: str, source: str | None, name: str | None,
             item["source"] = r.get("source")
         items.append(item)
     return key, clean, cfg, items
+
+
+def _source_refs(items: list[dict], *, table: str | None = None) -> list[dict]:
+    """Return get_record-ready source citations for resolved rows."""
+    refs: list[dict] = []
+    for item in items:
+        row_id = item.get("id")
+        source_table = table or item.get("source_table")
+        if row_id is not None and source_table:
+            refs.append({"table": source_table, "id": row_id})
+    return refs
 
 
 def _bucket_key(ts: str, bucket: str) -> str:

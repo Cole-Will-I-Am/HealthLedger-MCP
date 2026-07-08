@@ -194,7 +194,8 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 `get_reasoning_guide` returns the packaged reasoning guide; clients with MCP
 resource support can also read `healthledger://skill/reasoning`. Analysis tools
 guarantee top-level `value`, `reference_range`, `recency`, and `source_ids`
-keys, and analysis/summary/care-gap tools advertise `statementType: descriptive`.
+keys; `source_ids` are table/id citations suitable for `get_record`. Analysis,
+summary, and care-gap tools advertise `statementType: descriptive`.
 </details>
 
 <details>
@@ -218,7 +219,7 @@ keys, and analysis/summary/care-gap tools advertise `statementType: descriptive`
 | `semantic_search` | relevance-ranked (BM25) full-text over **all** free text — notes, event details, encounter reasons/plans, lab flags, imaging findings, document text, … — stemmed, best-first; each hit carries `source_table` + `record_id` + a highlighted snippet. Local FTS5, no embeddings/network. |
 | `data_coverage` | what's present / absent / stale, as data: per-domain counts with latest date &amp; staleness, an explicit list of **empty** domains, and a per-signal inventory — so the model checks before asserting instead of confabulating |
 | `get_record` | fetch one exact row by `table` + `id` — resolves a `source_ids` citation to the underlying data |
-| `analyze_*` (grounding) | analysis tools now return `source_ids` (the rows behind the numbers) and the latest value's `days_stale`, so every claim is traceable and recency is explicit |
+| `analyze_*` (grounding) | analysis tools now return `source_ids` as `{"table", "id"}` citations (the rows behind the numbers) and the latest value's `days_stale`, so every claim is traceable and recency is explicit |
 | `summarize_health` | compact cross-domain digest of the record |
 | `health_agenda` | stored upcoming tasks, refills, follow-ups, immunizations, reproductive due dates |
 | `care_gap_report` | missing/stale stored data and unresolved follow-ups — **without** clinical screening claims |

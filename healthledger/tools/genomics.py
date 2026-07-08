@@ -28,6 +28,7 @@ def add_genomic_record(
     source: str | None = None,
     notes: str | None = None,
     extra_json: str | None = None,
+    transcript: str | None = None,
     user: str | None = None,
 ) -> dict:
     """Store one structured genomic/PGx record as lab-reported data."""
@@ -42,6 +43,9 @@ def add_genomic_record(
         if clean_significance not in CLINICAL_SIGNIFICANCE:
             allowed = "|".join(sorted(CLINICAL_SIGNIFICANCE))
             raise ValueError(f"clinical_significance must be one of {allowed}")
+    clean_polygenic_percentile = _optional_finite_float(polygenic_percentile, "polygenic_percentile")
+    if clean_polygenic_percentile is not None and not 0.0 <= clean_polygenic_percentile <= 100.0:
+        raise ValueError("polygenic_percentile must be between 0 and 100")
     row = {
         "user": u,
         "created_ts": _now_iso(),
@@ -52,7 +56,7 @@ def add_genomic_record(
         "ordering_provider": _optional_text(ordering_provider, "ordering_provider", max_chars=160),
         "methodology": _optional_text(methodology, "methodology", max_chars=80),
         "gene": _optional_text(gene, "gene", max_chars=80),
-        "transcript": None,
+        "transcript": _optional_text(transcript, "transcript", max_chars=120),
         "hgvs_c": _optional_text(hgvs_c, "hgvs_c", max_chars=200),
         "hgvs_p": _optional_text(hgvs_p, "hgvs_p", max_chars=200),
         "rsid": _optional_text(rsid, "rsid", max_chars=80),
@@ -65,7 +69,7 @@ def add_genomic_record(
         "pgx_guideline_source": _optional_text(pgx_guideline_source, "pgx_guideline_source", max_chars=120),
         "polygenic_trait": _optional_text(polygenic_trait, "polygenic_trait", max_chars=160),
         "polygenic_score": _optional_finite_float(polygenic_score, "polygenic_score"),
-        "polygenic_percentile": _optional_finite_float(polygenic_percentile, "polygenic_percentile"),
+        "polygenic_percentile": clean_polygenic_percentile,
         "document_id": int(document_id) if document_id else None,
         "source": _optional_text(source, "source", max_chars=200),
         "notes": _optional_text(notes, "notes"),

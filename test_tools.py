@@ -98,6 +98,10 @@ with tempfile.TemporaryDirectory() as tmp:
     stats = analysis.get("stats", {})
     check("analysis sees normalized metric", stats.get("count") == 2, str(analysis))
     check("analysis trend rises", (stats.get("trend") or {}).get("direction") == "rising", str(stats))
+    check("analysis source_ids resolve via get_record",
+          analysis["source_ids"] == [{"table": "metrics", "id": first["id"]},
+                                     {"table": "metrics", "id": second["id"]}],
+          str(analysis["source_ids"]))
 
     event = server.log_event("symptom", "Headache", detail="after lunch", severity=4)
     check("event severity stored as float", event["severity"] == 4.0, str(event))
@@ -258,6 +262,7 @@ with tempfile.TemporaryDirectory() as tmp:
         lab_name="Example Genetics",
         methodology="targeted_panel",
         source="genetic report",
+        transcript="NM_007294.4",
     )
     pgx = server.add_genomic_record(
         "pgx",
@@ -274,7 +279,8 @@ with tempfile.TemporaryDirectory() as tmp:
     genomic_records = server.list_genomic_records()
     pgx_records = server.list_genomic_records("pgx")
     check("genomic variant stored",
-          variant["record_type"] == "variant" and variant["clinical_significance"] == "pathogenic",
+          variant["record_type"] == "variant" and variant["clinical_significance"] == "pathogenic"
+          and variant["transcript"] == "NM_007294.4",
           str(variant))
     check("genomic pgx stored", pgx["record_type"] == "pgx" and pgx["pgx_phenotype"] == "poor metabolizer",
           str(pgx))
@@ -282,6 +288,12 @@ with tempfile.TemporaryDirectory() as tmp:
           str(genomic_records))
     check("genomic records filter", pgx_records["count"] == 1 and pgx_records["genomic_records"][0]["id"] == pgx["id"],
           str(pgx_records))
+    try:
+        server.add_genomic_record("polygenic_risk", polygenic_trait="cad", polygenic_percentile=120)
+    except ValueError:
+        check("genomic percentile range rejected", True)
+    else:
+        check("genomic percentile range rejected", False)
 
     cycle1 = server.add_reproductive_record("cycle", start_date="2026-06-01", end_date="2026-06-05", flow_intensity="medium", pain_level=3)
     cycle2 = server.add_reproductive_record("cycle", start_date="2026-06-29", end_date="2026-07-03", flow_intensity="light", pain_level=2)
@@ -475,13 +487,20 @@ with tempfile.TemporaryDirectory() as tmp:
 
     at_g = server.analyze_trend("weight_kg", source="metric", user="ground")
     check("analyze_trend cites its rows + latest staleness",
-          len(at_g["source_ids"]) == 4 and at_g["latest"].get("days_stale") is not None,
+          len(at_g["source_ids"]) == 4
+          and all(ref.get("table") == "metrics" and ref.get("id") for ref in at_g["source_ids"])
+          and at_g["latest"].get("days_stale") is not None,
           str({"ids": at_g["source_ids"], "latest": at_g["latest"]}))
     lab_g = server.analyze_lab_trend("glucose", user="ground")
-    check("analyze_lab_trend cites its rows", len(lab_g["source_ids"]) == 1, str(lab_g))
+    check("analyze_lab_trend cites its rows",
+          len(lab_g["source_ids"]) == 1 and lab_g["source_ids"][0].get("table") == "lab_results",
+          str(lab_g))
     corr_g = server.correlate_metrics("metric", "weight_kg", "lab", "glucose", resample="month", user="ground")
     check("correlate exposes source_ids per series",
-          len(corr_g["series_a"]["source_ids"]) == 4, str(corr_g["series_a"]))
+          len(corr_g["series_a"]["source_ids"]) == 4
+          and all(ref.get("table") == "metrics" for ref in corr_g["series_a"]["source_ids"])
+          and all(ref.get("table") == "lab_results" for ref in corr_g["series_b"]["source_ids"]),
+          str(corr_g))
 
     search = server.search_records("pathology")
     check("search includes new domains", search["documents"] and search["tumors"], str(search))
