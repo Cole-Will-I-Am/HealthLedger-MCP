@@ -357,6 +357,467 @@ def care_gap_report(user: str | None = None) -> dict:
     }
 
 
+def _packet_attach_sources(rows: list[dict], table: str) -> list[dict]:
+    """Attach get_record-ready citations to rows included in a packet."""
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["source_ids"] = _source_refs([row], table=table)
+        out.append(item)
+    return out
+
+
+def _packet_signal_summary(source: str, table: str, name: str, rows: list[dict]) -> dict | None:
+    points: list[tuple[str, float]] = []
+    clean_rows = []
+    for row in rows:
+        ts = row.get("ts")
+        value = row.get("value")
+        if ts is None or value is None:
+            continue
+        full_ts = _to_full_ts(ts)
+        numeric = float(value)
+        clean = dict(row)
+        clean["ts"] = full_ts
+        clean["value"] = numeric
+        clean_rows.append(clean)
+        points.append((full_ts, numeric))
+    if not clean_rows:
+        return None
+    first, latest = clean_rows[0], clean_rows[-1]
+    first_value = float(first["value"])
+    latest_value = float(latest["value"])
+    absolute_change = round(latest_value - first_value, 4)
+    percent_change = round((absolute_change / first_value) * 100.0, 2) if first_value else None
+    trend = _linreg_per_day(points) if len(points) >= 2 else None
+    latest_ref = None
+    if latest.get("ref_low") is not None or latest.get("ref_high") is not None or latest.get("ref_text"):
+        latest_ref = {"low": latest.get("ref_low"), "high": latest.get("ref_high"), "text": latest.get("ref_text")}
+    return {
+        "source": source,
+        "name": name,
+        "count": len(clean_rows),
+        "unit": latest.get("unit"),
+        "date_range": {"first": first["ts"], "latest": latest["ts"]},
+        "first": {"id": first.get("id"), "ts": first["ts"], "value": round(first_value, 4)},
+        "latest": {
+            "id": latest.get("id"),
+            "ts": latest["ts"],
+            "value": round(latest_value, 4),
+            "days_stale": _days_since(latest["ts"]),
+        },
+        "change": {
+            "absolute": absolute_change,
+            "percent": percent_change,
+            "direction": "increase" if absolute_change > 0 else ("decrease" if absolute_change < 0 else "no change"),
+        },
+        "reference_range": latest_ref,
+        "trend": trend,
+        "source_ids": _source_refs(clean_rows, table=table),
+        "rank_change": abs(percent_change) if percent_change is not None else abs(absolute_change),
+    }
+
+
+def _packet_signal_summaries(conn, user: str, lo: str, hi: str, limit: int) -> list[dict]:
+    lo_date, hi_date = lo.split("T", 1)[0], hi.split("T", 1)[0]
+    summaries: list[dict] = []
+
+    metric_names = [r["metric"] for r in conn.execute(
+        "SELECT metric, COUNT(*) AS n FROM metrics WHERE user=? AND ts BETWEEN ? AND ? "
+        "GROUP BY metric HAVING n > 0 ORDER BY n DESC, metric ASC LIMIT ?",
+        (user, lo, hi, limit * 3),
+    ).fetchall()]
+    for name in metric_names:
+        rows = _rows(conn.execute(
+            "SELECT id, metric AS name, ts AS ts, value AS value, unit AS unit "
+            "FROM metrics WHERE user=? AND metric=? AND ts BETWEEN ? AND ? ORDER BY ts ASC",
+            (user, name, lo, hi),
+        ))
+        summary = _packet_signal_summary("metric", "metrics", name, rows)
+        if summary:
+            summaries.append(summary)
+
+    lab_names = [r["analyte"] for r in conn.execute(
+        "SELECT analyte, COUNT(*) AS n FROM lab_results WHERE user=? AND numeric_value IS NOT NULL "
+        "AND substr(COALESCE(result_date, created_ts), 1, 10) BETWEEN ? AND ? "
+        "GROUP BY analyte HAVING n > 0 ORDER BY n DESC, analyte ASC LIMIT ?",
+        (user, lo_date, hi_date, limit * 3),
+    ).fetchall()]
+    for name in lab_names:
+        rows = _rows(conn.execute(
+            "SELECT id, analyte AS name, COALESCE(result_date, created_ts) AS ts, numeric_value AS value, "
+            "unit, ref_low, ref_high, ref_text FROM lab_results WHERE user=? AND analyte=? "
+            "AND numeric_value IS NOT NULL AND substr(COALESCE(result_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(result_date, created_ts) ASC, id ASC",
+            (user, name, lo_date, hi_date),
+        ))
+        summary = _packet_signal_summary("lab", "lab_results", name, rows)
+        if summary:
+            summaries.append(summary)
+
+    biomarker_names = [r["biomarker"] for r in conn.execute(
+        "SELECT biomarker, COUNT(*) AS n FROM biomarkers WHERE user=? AND numeric_value IS NOT NULL "
+        "AND substr(COALESCE(measured_date, created_ts), 1, 10) BETWEEN ? AND ? "
+        "GROUP BY biomarker HAVING n > 0 ORDER BY n DESC, biomarker ASC LIMIT ?",
+        (user, lo_date, hi_date, limit * 3),
+    ).fetchall()]
+    for name in biomarker_names:
+        rows = _rows(conn.execute(
+            "SELECT id, biomarker AS name, COALESCE(measured_date, created_ts) AS ts, numeric_value AS value, "
+            "unit, ref_low, ref_high, ref_text FROM biomarkers WHERE user=? AND biomarker=? "
+            "AND numeric_value IS NOT NULL AND substr(COALESCE(measured_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(measured_date, created_ts) ASC, id ASC",
+            (user, name, lo_date, hi_date),
+        ))
+        summary = _packet_signal_summary("biomarker", "biomarkers", name, rows)
+        if summary:
+            summaries.append(summary)
+
+    wearable_names = [r["sample_type"] for r in conn.execute(
+        "SELECT sample_type, COUNT(*) AS n FROM wearable_samples WHERE user=? AND start_ts BETWEEN ? AND ? "
+        "GROUP BY sample_type HAVING n > 0 ORDER BY n DESC, sample_type ASC LIMIT ?",
+        (user, lo, hi, limit * 3),
+    ).fetchall()]
+    for name in wearable_names:
+        rows = _rows(conn.execute(
+            "SELECT * FROM ("
+            "SELECT id, sample_type AS name, start_ts AS ts, value AS value, unit AS unit "
+            "FROM wearable_samples WHERE user=? AND sample_type=? AND start_ts BETWEEN ? AND ? "
+            "ORDER BY start_ts DESC, id DESC LIMIT 1000"
+            ") ORDER BY ts ASC, id ASC",
+            (user, name, lo, hi),
+        ))
+        summary = _packet_signal_summary("wearable", "wearable_samples", name, rows)
+        if summary:
+            summaries.append(summary)
+
+    ranked = sorted(summaries, key=lambda item: (item["rank_change"], item["count"]), reverse=True)[:limit]
+    for item in ranked:
+        item.pop("rank_change", None)
+    return ranked
+
+
+def _packet_reason_matches(conn, user: str, reason: str | None, limit: int) -> list[dict]:
+    if not reason:
+        return []
+    q = _like_pattern(reason)
+    matches: list[dict] = []
+    searches = [
+        ("conditions", "SELECT id, COALESCE(onset_date, created_ts) AS date, name AS label FROM conditions WHERE user=? AND (name LIKE ? ESCAPE '\\' OR body_site LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\') ORDER BY COALESCE(onset_date, created_ts) DESC LIMIT ?"),
+        ("medications", "SELECT id, COALESCE(start_date, created_ts) AS date, name AS label FROM medications WHERE user=? AND (name LIKE ? ESCAPE '\\' OR generic_name LIKE ? ESCAPE '\\' OR indication LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\') ORDER BY COALESCE(start_date, created_ts) DESC LIMIT ?"),
+        ("lab_results", "SELECT id, COALESCE(result_date, created_ts) AS date, analyte AS label FROM lab_results WHERE user=? AND (analyte LIKE ? ESCAPE '\\' OR value_text LIKE ? ESCAPE '\\' OR flag LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\') ORDER BY COALESCE(result_date, created_ts) DESC LIMIT ?"),
+        ("encounters", "SELECT id, COALESCE(encounter_date, created_ts) AS date, encounter_type AS label FROM encounters WHERE user=? AND (encounter_type LIKE ? ESCAPE '\\' OR provider LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\' OR assessment LIKE ? ESCAPE '\\' OR plan LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\') ORDER BY COALESCE(encounter_date, created_ts) DESC LIMIT ?"),
+        ("documents", "SELECT id, COALESCE(document_date, created_ts) AS date, title AS label FROM documents WHERE user=? AND (title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR content_text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') ORDER BY COALESCE(document_date, created_ts) DESC LIMIT ?"),
+        ("genomic_records", "SELECT id, COALESCE(test_date, report_date, created_ts) AS date, COALESCE(gene, record_type) AS label FROM genomic_records WHERE user=? AND (record_type LIKE ? ESCAPE '\\' OR gene LIKE ? ESCAPE '\\' OR rsid LIKE ? ESCAPE '\\' OR associated_condition LIKE ? ESCAPE '\\' OR pgx_drug LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\') ORDER BY COALESCE(test_date, report_date, created_ts) DESC LIMIT ?"),
+    ]
+    for table, sql in searches:
+        placeholders = sql.count("?") - 2
+        args = [user] + [q] * placeholders + [max(1, limit)]
+        for row in _rows(conn.execute(sql, args)):
+            row["source_table"] = table
+            row["source_ids"] = _source_refs([row], table=table)
+            matches.append(row)
+    return sorted(matches, key=lambda row: row.get("date") or "", reverse=True)[:limit]
+
+
+def _packet_markdown(packet: dict) -> str:
+    lines = [
+        "# HealthLedger Clinician Packet",
+        "",
+        f"- User: {packet['user']}",
+        f"- Generated: {packet['generated_at']}",
+        f"- Window: {packet['window']['since']} to {packet['window']['until']}",
+    ]
+    if packet.get("reason_for_visit"):
+        lines.append(f"- Reason for visit: {packet['reason_for_visit']}")
+    if packet.get("specialty"):
+        lines.append(f"- Specialty: {packet['specialty']}")
+    lines += ["", "## Current Snapshot"]
+    for key, label in [("active_conditions", "Active conditions"), ("active_medications", "Active medications"),
+                       ("active_allergies", "Active allergies")]:
+        rows = packet["current_snapshot"][key]
+        lines.append(f"- {label}: {len(rows)} stored")
+        for row in rows[:8]:
+            name = row.get("name") or row.get("allergen") or row.get("title")
+            detail = row.get("status") or row.get("dose") or row.get("reaction")
+            suffix = f" ({detail})" if detail else ""
+            lines.append(f"  - {name}{suffix} [source_ids={row.get('source_ids', [])}]")
+    lines += ["", "## Changed Signals"]
+    if packet["changed_signals"]:
+        for signal in packet["changed_signals"]:
+            change = signal["change"]
+            trend = signal.get("trend") or {}
+            p = trend.get("slope_p_value")
+            ci = trend.get("slope_ci95_per_day")
+            uncertainty = f", p={p}" if p is not None else ""
+            uncertainty += f", CI/day={ci}" if ci is not None else ""
+            lines.append(
+                f"- {signal['source']}:{signal['name']} n={signal['count']} "
+                f"{signal['date_range']['first']}..{signal['date_range']['latest']} "
+                f"latest={signal['latest']['value']} {signal.get('unit') or ''} "
+                f"change={change['absolute']} ({change['percent']}%){uncertainty} "
+                f"[source_ids={signal['source_ids']}]"
+            )
+    else:
+        lines.append("- No numeric signal changes found in this window.")
+    lines += ["", "## Follow-Up And Completeness"]
+    lines.append(f"- Open tasks: {len(packet['follow_up']['open_tasks'])}")
+    lines.append(f"- Overdue follow-ups: {len(packet['follow_up']['overdue_followups'])}")
+    lines.append(f"- Empty stored domains: {', '.join(packet['coverage']['empty_domains']) or 'none'}")
+    lines += ["", "## Genomics / PGx"]
+    if packet["genomics_pgx"]:
+        for row in packet["genomics_pgx"]:
+            label = row.get("gene") or row.get("polygenic_trait") or row.get("record_type")
+            lines.append(
+                f"- {row.get('record_type')}: {label}; significance={row.get('clinical_significance')}; "
+                f"pgx={row.get('pgx_phenotype')} {row.get('pgx_drug') or ''} "
+                f"[source_ids={row.get('source_ids', [])}]"
+            )
+    else:
+        lines.append("- No stored genomic/PGx records in the selected window.")
+    lines += ["", "## Questions To Discuss"]
+    for item in packet["questions_to_discuss"]:
+        lines.append(f"- {item['question']} [source_ids={item.get('source_ids', [])}]")
+    lines += ["", packet["disclaimer"]]
+    return "\n".join(lines)
+
+
+@mcp.tool(annotations={"title": "Build clinician packet", "readOnlyHint": True, "idempotentHint": True, "statementType": "descriptive"})
+def build_clinician_packet(
+    reason_for_visit: str | None = None,
+    specialty: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    user: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Build a source-cited, descriptive visit-prep packet for a clinician or specialist.
+
+    The packet is deterministic and local: current medications/conditions/allergies,
+    recent changed numeric signals with uncertainty, relevant stored records,
+    follow-up/completeness items, lab-reported genomic/PGx records, and a Markdown
+    rendering. It does not diagnose, rank clinical urgency, or suggest treatment.
+    """
+    u = _tool_user(user, "build_clinician_packet")
+    lim = _limit(limit, default=10)
+    clean_reason = _optional_text(reason_for_visit, "reason_for_visit", max_chars=300)
+    clean_specialty = _optional_text(specialty, "specialty", max_chars=120)
+    if not since:
+        since = (datetime.now(timezone.utc) - timedelta(days=180)).date().isoformat()
+    lo, hi = _range_bounds(since, until)
+    lo_date, hi_date = lo.split("T", 1)[0], hi.split("T", 1)[0]
+    _audit("build_clinician_packet", f"{_audit_user(u)} reason_hash={_fingerprint(clean_reason or '')} specialty={clean_specialty or ''}")
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    with _db() as conn:
+        profile = {r["key"]: r["value"] for r in conn.execute(
+            "SELECT key, value FROM profile WHERE user=? ORDER BY key", (u,)
+        ).fetchall()}
+        counts = _table_counts(conn, u)
+        empty_domains = sorted([table for table, count in counts.items() if count == 0])
+        coverage_domains = {}
+        for table in sorted(counts):
+            if counts[table] == 0:
+                continue
+            date_expr = {
+                "metrics": "ts",
+                "events": "ts",
+                "notes": "ts",
+                "lab_results": "COALESCE(result_date, created_ts)",
+                "biomarkers": "COALESCE(measured_date, created_ts)",
+                "wearable_samples": "start_ts",
+                "substance_use_logs": "timestamp",
+                "encounters": "COALESCE(encounter_date, created_ts)",
+                "procedures": "COALESCE(procedure_date, created_ts)",
+                "imaging_reports": "COALESCE(imaging_date, created_ts)",
+                "immunizations": "COALESCE(immunization_date, created_ts)",
+                "medications": "COALESCE(start_date, created_ts)",
+                "conditions": "COALESCE(onset_date, created_ts)",
+                "allergies": "COALESCE(noted_date, created_ts)",
+                "genomic_records": "COALESCE(test_date, report_date, created_ts)",
+                "care_tasks": "COALESCE(due_date, created_ts)",
+            }.get(table)
+            latest = None
+            if date_expr:
+                latest = conn.execute(f"SELECT MAX({date_expr}) AS latest FROM {table} WHERE user=?", (u,)).fetchone()["latest"]
+            coverage_domains[table] = {"count": counts[table], "latest": latest,
+                                       "days_since_last": _days_since(latest) if latest else None}
+
+        active_conditions = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, name, status, onset_date, severity, body_site FROM conditions "
+            "WHERE user=? AND status='active' ORDER BY name LIMIT ?",
+            (u, lim * 5),
+        )), "conditions")
+        active_medications = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, name, generic_name, dose, route, frequency, schedule, refill_due_date, prescriber FROM medications "
+            "WHERE user=? AND status='active' ORDER BY name LIMIT ?",
+            (u, lim * 5),
+        )), "medications")
+        active_allergies = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, allergen, reaction, severity, status, noted_date FROM allergies "
+            "WHERE user=? AND status='active' ORDER BY allergen LIMIT ?",
+            (u, lim * 5),
+        )), "allergies")
+
+        changed_signals = _packet_signal_summaries(conn, u, lo, hi, lim)
+
+        recent_labs = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, result_date, analyte, value_text, numeric_value, unit, ref_low, ref_high, ref_text, flag FROM lab_results "
+            "WHERE user=? AND substr(COALESCE(result_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(result_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "lab_results")
+        recent_biomarkers = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, measured_date, biomarker, category, value_text, numeric_value, unit, ref_low, ref_high, ref_text, flag FROM biomarkers "
+            "WHERE user=? AND substr(COALESCE(measured_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(measured_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "biomarkers")
+        recent_encounters = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, encounter_date, encounter_type, provider, facility, reason, assessment, plan, follow_up_date FROM encounters "
+            "WHERE user=? AND substr(COALESCE(encounter_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(encounter_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "encounters")
+        recent_procedures = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, procedure_date, name, body_site, provider, facility, outcome, follow_up_date FROM procedures "
+            "WHERE user=? AND substr(COALESCE(procedure_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(procedure_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "procedures")
+        recent_imaging = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, imaging_date, modality, body_site, facility, impression, follow_up_date FROM imaging_reports "
+            "WHERE user=? AND substr(COALESCE(imaging_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(imaging_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "imaging_reports")
+        recent_documents = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, document_date, document_type, title, source, provider, tags FROM documents "
+            "WHERE user=? AND substr(COALESCE(document_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(document_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "documents")
+        tumor_records = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, cancer_type, tumor_name, body_site, diagnosis_date, status, stage, grade, treatment_status FROM tumors "
+            "WHERE user=? ORDER BY COALESCE(diagnosis_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lim),
+        )), "tumors")
+        family_history = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, relation, condition_name, status, age_at_onset, relative_status, age_at_death, cause_of_death FROM family_history "
+            "WHERE user=? ORDER BY relation ASC, condition_name ASC LIMIT ?",
+            (u, lim * 5),
+        )), "family_history")
+        genomics_pgx = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, record_type, test_date, report_date, lab_name, methodology, gene, transcript, hgvs_c, hgvs_p, rsid, "
+            "zygosity, clinical_significance, associated_condition, pgx_phenotype, pgx_drug, pgx_guideline_source, "
+            "polygenic_trait, polygenic_score, polygenic_percentile FROM genomic_records "
+            "WHERE user=? AND substr(COALESCE(test_date, report_date, created_ts), 1, 10) BETWEEN ? AND ? "
+            "ORDER BY COALESCE(test_date, report_date, created_ts) DESC, id DESC LIMIT ?",
+            (u, lo_date, hi_date, lim),
+        )), "genomic_records")
+
+        open_tasks = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, task_type, title, due_date, status, priority, related_table, related_id FROM care_tasks "
+            "WHERE user=? AND status NOT IN ('done','completed','cancelled') ORDER BY COALESCE(due_date, created_ts) ASC LIMIT ?",
+            (u, lim * 5),
+        )), "care_tasks")
+        overdue_followups = []
+        for table, date_col, title_sql in [
+            ("encounters", "follow_up_date", "encounter_type || COALESCE(': ' || provider, '')"),
+            ("procedures", "follow_up_date", "name"),
+            ("imaging_reports", "follow_up_date", "modality || COALESCE(': ' || body_site, '')"),
+        ]:
+            rows = _rows(conn.execute(
+                f"SELECT id, {date_col} AS due_date, {title_sql} AS title FROM {table} "
+                f"WHERE user=? AND {date_col} IS NOT NULL AND {date_col} <= ? ORDER BY {date_col} ASC LIMIT ?",
+                (u, today, lim),
+            ))
+            for row in _packet_attach_sources(rows, table):
+                row["source_table"] = table
+                overdue_followups.append(row)
+        refills_due = _packet_attach_sources(_rows(conn.execute(
+            "SELECT id, name, dose, refill_due_date, prescriber FROM medications "
+            "WHERE user=? AND status='active' AND refill_due_date IS NOT NULL AND refill_due_date <= ? "
+            "ORDER BY refill_due_date ASC LIMIT ?",
+            (u, today, lim),
+        )), "medications")
+        reason_matches = _packet_reason_matches(conn, u, clean_reason, lim)
+
+    questions = []
+    if active_medications or active_allergies:
+        questions.append({
+            "question": "Are the stored active medications and allergies current for this visit?",
+            "source_ids": _source_refs(active_medications[:5], table="medications") + _source_refs(active_allergies[:5], table="allergies"),
+        })
+    if changed_signals:
+        questions.append({
+            "question": "Which changed stored signals should be reviewed in the context of the visit?",
+            "source_ids": changed_signals[0]["source_ids"][:10],
+        })
+    if genomics_pgx:
+        questions.append({
+            "question": "Are the stored lab-reported genomic or PGx classifications relevant to this visit?",
+            "source_ids": _source_refs(genomics_pgx[:5], table="genomic_records"),
+        })
+    if open_tasks or overdue_followups:
+        questions.append({
+            "question": "Which stored follow-up tasks or follow-up dates are still open?",
+            "source_ids": _source_refs(open_tasks[:5], table="care_tasks") + [ref for row in overdue_followups[:5] for ref in row.get("source_ids", [])],
+        })
+    if empty_domains:
+        questions.append({
+            "question": "Which empty stored domains should be updated before relying on this packet?",
+            "source_ids": [],
+        })
+
+    disclaimer = _assert_descriptive(
+        "Clinician packet organizes stored data and descriptive statistics only; it is not diagnosis, treatment advice, or a dosing recommendation.",
+        "build_clinician_packet.disclaimer",
+    )
+    packet = {
+        "user": u,
+        "generated_at": _now_iso(),
+        "reason_for_visit": clean_reason,
+        "specialty": clean_specialty,
+        "window": {"since": lo, "until": hi},
+        "coverage": {
+            "counts": counts,
+            "domains": coverage_domains,
+            "empty_domains": empty_domains,
+        },
+        "current_snapshot": {
+            "profile": profile,
+            "active_conditions": active_conditions,
+            "active_medications": active_medications,
+            "active_allergies": active_allergies,
+        },
+        "changed_signals": changed_signals,
+        "recent_results": {
+            "labs": recent_labs,
+            "biomarkers": recent_biomarkers,
+        },
+        "records": {
+            "encounters": recent_encounters,
+            "procedures": recent_procedures,
+            "imaging_reports": recent_imaging,
+            "documents": recent_documents,
+            "tumors": tumor_records,
+            "family_history": family_history,
+        },
+        "genomics_pgx": genomics_pgx,
+        "follow_up": {
+            "open_tasks": open_tasks,
+            "overdue_followups": overdue_followups,
+            "refills_due": refills_due,
+        },
+        "reason_matches": reason_matches,
+        "questions_to_discuss": questions,
+        "disclaimer": disclaimer,
+    }
+    packet["markdown"] = _assert_descriptive(_packet_markdown(packet), "build_clinician_packet.markdown")
+    return packet
+
+
 @mcp.tool(annotations={"title": "Search records", "readOnlyHint": True, "idempotentHint": True})
 def search_records(query: str, user: str | None = None, limit: int = 50) -> dict:
     """Full-text-ish search across stored health domains (case-insensitive substring)."""

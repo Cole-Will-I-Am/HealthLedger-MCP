@@ -11,7 +11,7 @@ and reason over that record on demand.
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-6E56CF)](https://modelcontextprotocol.io)
-[![Tools](https://img.shields.io/badge/tools-78-0EA5E9)](#-tool-catalog)
+[![Tools](https://img.shields.io/badge/tools-79-0EA5E9)](#-tool-catalog)
 [![Local-first](https://img.shields.io/badge/runs-local--first-16A34A)](#-quick-start)
 [![Model-agnostic](https://img.shields.io/badge/works%20with-any%20LLM-8B5CF6)](#-use-it-with-any-client--any-model)
 [![Storage](https://img.shields.io/badge/storage-SQLite%20(WAL)-003B57?logo=sqlite&logoColor=white)](#-storage)
@@ -131,7 +131,7 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 
 ## 🧰 Tool catalog
 
-**78 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
+**79 tools**, grouped by purpose. Every tool accepts an optional `user` label (default
 `me`, from `HEALTH_MCP_DEFAULT_USER`).
 
 <details open>
@@ -195,14 +195,14 @@ Recommended keys for clients: `birth_date`, `sex`, `gender`, `height_cm`, `blood
 resource support can also read `healthledger://skill/reasoning`. Analysis tools
 guarantee top-level `value`, `reference_range`, `recency`, and `source_ids`
 keys; `source_ids` are table/id citations suitable for `get_record`. Analysis,
-summary, and care-gap tools advertise `statementType: descriptive`.
+summary, care-gap, and clinician-packet tools advertise `statementType: descriptive`.
 </details>
 
 <details>
 <summary><b>🗓️ Planning, whole-record views &amp; operations</b></summary>
 
 `add_care_task` · `complete_care_task` · `list_care_tasks` · `list_due_tasks` ·
-`health_agenda` · `care_gap_report` · `summarize_health` · `search_records` ·
+`health_agenda` · `care_gap_report` · `summarize_health` · `build_clinician_packet` · `search_records` ·
 `delete_record` · `export_data` · `health_status`
 </details>
 
@@ -221,6 +221,7 @@ summary, and care-gap tools advertise `statementType: descriptive`.
 | `get_record` | fetch one exact row by `table` + `id` — resolves a `source_ids` citation to the underlying data |
 | `analyze_*` (grounding) | analysis tools now return `source_ids` as `{"table", "id"}` citations (the rows behind the numbers) and the latest value's `days_stale`, so every claim is traceable and recency is explicit |
 | `summarize_health` | compact cross-domain digest of the record |
+| `build_clinician_packet` | source-cited visit-prep packet with current snapshot, changed signals, stored follow-ups, genomic/PGx records, reason-for-visit matches, Markdown output, and no clinical recommendations |
 | `health_agenda` | stored upcoming tasks, refills, follow-ups, immunizations, reproductive due dates |
 | `care_gap_report` | missing/stale stored data and unresolved follow-ups — **without** clinical screening claims |
 | `export_data` | paginated & capped; use `table`, `limit`, `offset` (`table=all` → one capped page per table) |

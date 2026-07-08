@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("analysis contract test covers registered analysis tools", not missing_contract_calls,
           str(missing_contract_calls))
     registered_tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
-    descriptive_tools = analysis_tool_names + ["summarize_health", "care_gap_report"]
+    descriptive_tools = analysis_tool_names + ["summarize_health", "care_gap_report", "build_clinician_packet"]
     missing_statement_type = [
         name for name in descriptive_tools
         if getattr(getattr(registered_tools.get(name), "annotations", None), "statementType", None) != "descriptive"
@@ -523,6 +523,31 @@ with tempfile.TemporaryDirectory() as tmp:
           and summary["recent_genomic_records"] and summary["recent_reproductive_records"] and summary["recent_substance_use"]
           and summary["recent_wearable_samples"] and summary["wearable_types"],
           str(summary))
+
+    packet = server.build_clinician_packet(
+        reason_for_visit="BRCA1",
+        specialty="oncology",
+        since="2026-01-01",
+        until="2026-07-06",
+    )
+    check("clinician packet includes cited current snapshot",
+          packet["current_snapshot"]["active_medications"]
+          and packet["current_snapshot"]["active_medications"][0]["source_ids"][0]["table"] == "medications",
+          str(packet["current_snapshot"]))
+    check("clinician packet includes changed signals with citations",
+          packet["changed_signals"]
+          and packet["changed_signals"][0]["source_ids"]
+          and {"source", "name", "count", "trend", "date_range"}.issubset(packet["changed_signals"][0]),
+          str(packet["changed_signals"]))
+    check("clinician packet includes genomics and reason matches",
+          packet["genomics_pgx"] and packet["genomics_pgx"][0]["source_ids"][0]["table"] == "genomic_records"
+          and packet["reason_matches"],
+          str({"genomics": packet["genomics_pgx"], "matches": packet["reason_matches"]}))
+    check("clinician packet markdown is descriptive and source-cited",
+          "HealthLedger Clinician Packet" in packet["markdown"]
+          and "source_ids" in packet["markdown"]
+          and "not diagnosis" in packet["disclaimer"],
+          packet["markdown"])
 
     status = server.health_status()
     check("health_status reports schema version", status["schema"]["current_version"] == server.SCHEMA_VERSION,
