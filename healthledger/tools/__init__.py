@@ -14,4 +14,5 @@ from healthledger.tools import (  # noqa: F401
     trends,
     overview,
     retrieval,
+    interop,
 )

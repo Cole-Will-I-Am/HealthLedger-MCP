@@ -476,6 +476,11 @@ def _init_db() -> None:
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             ("schema_version", str(SCHEMA_VERSION)),
         )
+
+        # Cryptographic integrity: add chain columns + tips table
+        from healthledger.integrity import _migrate_chain_schema
+        _migrate_chain_schema(conn)
+
     try:
         os.chmod(DB_PATH, 0o600)
     except OSError:
